@@ -1,0 +1,72 @@
+name: 发布 android-tools
+run-name: 发布 android-tools ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '新版本标签，例如 v1.2.3'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-tools-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 构建并发布 Windows 版
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 获取源码
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 准备 Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: go.sum
+
+      - name: 检查标签
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw '发布仅支持 main 分支' }
+          if ($env:RELEASE_TAG -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { throw '标签格式应为 v1.2.3' }
+          $refs = gh api "repos/$env:GITHUB_REPOSITORY/git/matching-refs/tags/$env:RELEASE_TAG" | ConvertFrom-Json
+          if ($refs.ref -contains "refs/tags/$env:RELEASE_TAG") { throw '标签已存在，请使用新标签' }
+
+      - name: 测试并构建压缩包
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          go test -count=1 ./...
+          go vet ./...
+          go run ./cmd/package -out "$env:RUNNER_TEMP/android-tools-windows-amd64.zip"
+
+      - name: 创建标签
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:GITHUB_SHA"
+
+      - name: 发布
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: android-tools ${{ inputs.tag }}
+          body: 'Windows 10/11 x64：下载并解压 ZIP，运行 android-tools.exe。'
+          files: ${{ runner.temp }}/android-tools-windows-amd64.zip
+          fail_on_unmatched_files: true

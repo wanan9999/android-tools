@@ -1,0 +1,10 @@
+*.exe
+*.dll
+*.zip
+*.log
+*.syso
+releases/
+build/
+.env
+.env.*
+adbkey*

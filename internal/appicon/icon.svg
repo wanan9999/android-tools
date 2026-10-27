@@ -1,0 +1,7 @@
+<!-- Adapted from Lucide smartphone; see LUCIDE-LICENSE.txt. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <path d="M6 1 H18 Q23 1 23 6 V18 Q23 23 18 23 H6 Q1 23 1 18 V6 Q1 1 6 1 Z" fill="#355fc1" />
+  <path d="M8.5 4 H15.5 Q17.5 4 17.5 6 V18 Q17.5 20 15.5 20 H8.5 Q6.5 20 6.5 18 V6 Q6.5 4 8.5 4 Z" fill="#ffffff" />
+  <path d="M8.8 5.4 H15.2 Q16.1 5.4 16.1 6.3 V17.7 Q16.1 18.6 15.2 18.6 H8.8 Q7.9 18.6 7.9 17.7 V6.3 Q7.9 5.4 8.8 5.4 Z" fill="#355fc1" />
+  <path d="M12 16.3 a0.7 0.7 0 1 0 0.01 0 Z" fill="#ffffff" />
+</svg>
