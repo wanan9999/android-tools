@@ -129,18 +129,6 @@ func fastbootDevices(ds []device) []device {
 	}
 	return out
 }
-func sameFastboot(current, latest []device) bool {
-	old := fastbootDevices(current)
-	if len(old) != len(latest) {
-		return false
-	}
-	for i := range old {
-		if old[i] != latest[i] {
-			return false
-		}
-	}
-	return true
-}
 func mergeFastboot(current, latest []device) []device {
 	out := make([]device, 0, len(current)+len(latest))
 	for _, d := range current {

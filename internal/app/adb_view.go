@@ -94,10 +94,11 @@ func (a *app) backToDevices() {
 	a.stopTerminal()
 	a.adbInfoRequest++
 	a.fastbootInfoRequest++
+	a.fastbootInfoOpen = false
 	a.page = "devices"
 }
 
-func (a *app) adbAction(c *ui.Context, label string, symbol *ui.SVG) bool {
+func (a *app) deviceAction(c *ui.Context, label string, symbol *ui.SVG) bool {
 	button := ui.Button(c, "").Grow(1).Height(40).Label(label).Disabled(a.busy)
 	button.Children(func() { ui.Icon(c, symbol).Size(16, 16); ui.Text(c, label).Margin(0, 0, 0, 8).SingleLine() })
 	return button.Clicked()
@@ -114,7 +115,7 @@ func (a *app) adbView(c *ui.Context) {
 				ui.Text(c, "ADB 操作").FontSize(20).Bold()
 				ui.Text(c, a.adbSerial).FontSize(12).TextColor(t.TextMuted).SingleLine()
 			})
-			if a.button(c, "terminal", adbIcon, "打开 ADB 终端") {
+			if a.button(c, "terminal", terminalIcon, "打开 ADB 终端") {
 				a.openTerminal("ADB", a.adbSerial)
 			}
 		})
@@ -153,10 +154,10 @@ func (a *app) adbView(c *ui.Context) {
 		ui.Column(c).Gap(12).Children(func() {
 			ui.Text(c, "文件与画面").Bold()
 			ui.Grid(c).Columns(2).Gap(8).Children(func() {
-				if a.adbAction(c, "安装 APK", installIcon) {
+				if a.deviceAction(c, "安装 APK", apkIcon) {
 					a.installAPK(a.adbSerial)
 				}
-				if a.adbAction(c, "保存截图", cameraIcon) {
+				if a.deviceAction(c, "保存截图", cameraIcon) {
 					a.screenshot(a.adbSerial)
 				}
 			})
@@ -168,7 +169,7 @@ func (a *app) adbView(c *ui.Context) {
 					label, arg string
 					icon       *ui.SVG
 				}{{"重启系统", "", restart}, {"进入引导程序", "bootloader", bootIcon}, {"进入恢复模式", "recovery", recoveryIcon}} {
-					if a.adbAction(c, v.label, v.icon) {
+					if a.deviceAction(c, v.label, v.icon) {
 						serial := a.adbSerial
 						a.task(func() error {
 							args := []string{"-s", serial, "reboot"}

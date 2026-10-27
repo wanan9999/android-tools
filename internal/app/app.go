@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	qrcode "github.com/skip2/go-qrcode"
+	"golang.org/x/sys/windows"
 )
 
 type app struct {
@@ -24,6 +26,16 @@ type app struct {
 	manager                                            *manager
 	devices                                            []device
 	services                                           []service
+	fastbootCandidates                                 []fastbootCandidate
+	fastbootScanError                                  bool
+	fastbootDeviceError                                bool
+	fastbootWake                                       chan struct{}
+	driverHelp                                         bool
+	driverLaunching                                    bool
+	driverHelpError                                    string
+	driverHelpRevision                                 uint64
+	driverTarget                                       fastbootCandidate
+	driverCancel                                       context.CancelFunc
 	selected, page, address, code, connection, message string
 	busy, audio                                        bool
 	mirrorSettings                                     bool
@@ -36,6 +48,7 @@ type app struct {
 	fastbootSerial, fastbootOutput                     string
 	fastbootInfoError                                  string
 	fastbootInfoLoading                                bool
+	fastbootInfoOpen                                   bool
 	fastbootInfoRequest                                uint64
 	pairedAddress                                      string
 	adbSerial                                          string
@@ -48,7 +61,6 @@ type app struct {
 	refreshing                                         atomic.Bool
 	pendingRefresh                                     atomic.Bool
 	deviceRevision                                     atomic.Uint64
-	fastbootRevision                                   atomic.Uint64
 	pairMode                                           int
 	terminal                                           terminalState
 }
@@ -59,19 +71,22 @@ func icon(s string) *ui.SVG {
 
 var phone = icon(`<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/>`)
 var refresh = icon(`<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5 9a7 7 0 0 1 12-3l3 3M19 15a7 7 0 0 1-12 3l-3-3"/>`)
-var plus = icon(`<path d="M12 5v14M5 12h14"/>`)
-var settingsIcon = icon(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 3.1-.2-.1a1.7 1.7 0 0 0-1.8.7l-.1.2h-3.6l-.1-.2a1.7 1.7 0 0 0-1.8-.7l-.2.1-1.8-3.1.1-.1a1.7 1.7 0 0 0 .3-1.9l-.1-.2-3.2-.1V9.9l.2-.1a1.7 1.7 0 0 0 .7-1.8l-.1-.2 3.1-1.8.1.1a1.7 1.7 0 0 0 1.9.3l.2-.1.1-3.2h3.6l.1.2a1.7 1.7 0 0 0 1.8.7l.2-.1 1.8 3.1-.1.1a1.7 1.7 0 0 0-.3 1.9l.1.2 3.2.1v3.6l-.2.1a1.7 1.7 0 0 0-.7 1.8z"/>`)
+var settingsIcon = icon(`<path d="M14 17H5M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>`)
 var screen = icon(`<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>`)
-var link = icon(`<path d="M10 13a5 5 0 0 0 7 .5l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7-.5l-3 3a5 5 0 0 0 7 7l2-2"/>`)
+var screenOff = icon(`<path d="M12 17v4M17 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 1.184-1.826M2 2l20 20M8 21h8M8.656 3H20a2 2 0 0 1 2 2v10a2 2 0 0 1-.293 1.042"/>`)
+var wifiIcon = icon(`<path d="M12 20h.01M2 8.82a15 15 0 0 1 20 0M5 12.859a10 10 0 0 1 14 0M8.5 16.429a5 5 0 0 1 7 0"/>`)
 var restart = icon(`<path d="M20 7v5h-5M4 12a8 8 0 1 0 2-5"/>`)
-var adbIcon = icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/>`)
-var fastbootIcon = icon(`<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>`)
+var terminalIcon = icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/>`)
+var toolsIcon = icon(`<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>`)
+var closeIcon = icon(`<path d="M18 6 6 18M6 6l12 12"/>`)
 var backIcon = icon(`<path d="M19 12H5m0 0 6-6m-6 6 6 6"/>`)
-var installIcon = icon(`<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8m-4-4h8"/>`)
+var apkIcon = icon(`<path d="M4 11V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1M14 2v5a1 1 0 0 0 1 1h5M2 15h10m-3 3 3-3-3-3"/>`)
+var flashIcon = icon(`<path d="m16 6-4-4-4 4M12 2v8"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 18h.01M10 18h.01"/>`)
 var cameraIcon = icon(`<path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3"/>`)
-var bootIcon = icon(`<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M12 7v8m-3-3 3 3 3-3"/>`)
-var recoveryIcon = icon(`<path d="M12 3a9 9 0 1 0 9 9M12 3v5h5"/><path d="M12 9v6m-3-3h6"/>`)
+var bootIcon = icon(`<path d="m10 17 5-5-5-5M15 12H3M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/>`)
+var recoveryIcon = icon(`<circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24m5.66 0 4.24-4.24m-4.24 9.9 4.24 4.24m-9.9-4.24-4.24 4.24"/><circle cx="12" cy="12" r="4"/>`)
 var trash = icon(`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/>`)
+var infoIcon = icon(`<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>`)
 var downloadIcon = icon(`<path d="M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3"/>`)
 
 func (a *app) task(fn func() error) {
@@ -104,7 +119,6 @@ func (a *app) reload() {
 		return
 	}
 	revision := a.deviceRevision.Load()
-	fastbootRevision := a.fastbootRevision.Load()
 	go func() {
 		defer func() {
 			a.refreshing.Store(false)
@@ -115,9 +129,7 @@ func (a *app) reload() {
 		ds, ss, err := a.manager.refresh()
 		a.win.Update(func() {
 			if revision == a.deviceRevision.Load() {
-				if fastbootRevision != a.fastbootRevision.Load() {
-					ds = mergeFastboot(ds, fastbootDevices(a.devices))
-				}
+				ds = mergeFastboot(ds, fastbootDevices(a.devices))
 				a.devices = ds
 			} else {
 				a.pendingRefresh.Store(true)
@@ -157,7 +169,7 @@ func (a *app) view(c *ui.Context) {
 			sidebar := ui.Sidebar(c, &a.page, func() {
 				ui.SidebarSection(c, "设备", nil, func() {
 					ui.SidebarItem(c, "devices", phone, "所有设备")
-					ui.SidebarItem(c, "pair", link, "无线连接")
+					ui.SidebarItem(c, "pair", wifiIcon, "无线连接")
 				})
 			}).Grow(1)
 			if c.Vibrancy() {
@@ -166,6 +178,9 @@ func (a *app) view(c *ui.Context) {
 		})
 		if a.page != "terminal" && a.terminal.running {
 			a.stopTerminal()
+		}
+		if a.page != "devices" && a.driverCancel != nil {
+			a.driverCancel()
 		}
 		ui.Box(c).Width(1).Background(t.Border)
 		ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
@@ -242,7 +257,7 @@ func (a *app) deviceView(c *ui.Context) {
 				ui.Text(c, "下次启动投屏时生效").FontSize(12).TextColor(t.TextMuted)
 			})
 		})
-		if a.button(c, "add", plus, "无线连接") {
+		if a.button(c, "add", wifiIcon, "无线连接") {
 			a.page = "pair"
 		}
 		if a.button(c, "tools", downloadIcon, "检查并下载组件") {
@@ -255,15 +270,33 @@ func (a *app) deviceView(c *ui.Context) {
 				if err != nil {
 					return err
 				}
-				return a.engine.start()
+				if err := a.engine.start(); err != nil {
+					return err
+				}
+				select {
+				case a.fastbootWake <- struct{}{}:
+				default:
+				}
+				return nil
 			}, "组件检查完成")
 		}
 		if a.button(c, "refresh", refresh, "刷新设备") {
+			select {
+			case a.fastbootWake <- struct{}{}:
+			default:
+			}
 			a.reload()
 		}
 	})
 
-	if len(a.devices) == 0 {
+	if a.fastbootScanError || a.fastbootDeviceError {
+		text := "Fastboot 检查失败，请确认组件可用后刷新"
+		if a.fastbootDeviceError && !a.fastbootScanError {
+			text = "Windows 设备检查失败，请刷新重试"
+		}
+		ui.Text(c, text).FontSize(12).TextColor(t.TextMuted)
+	}
+	if len(a.devices) == 0 && len(a.fastbootCandidates) == 0 {
 		ui.Column(c).Padding(30).Gap(8).Radius(12).Background(t.Surface).Children(func() {
 			ui.Text(c, "尚未发现设备").Bold()
 			ui.Text(c, "通过 USB 连接并允许调试，或添加无线设备。").FontSize(12).TextColor(t.TextMuted)
@@ -289,15 +322,15 @@ func (a *app) deviceView(c *ui.Context) {
 				}
 			})
 			if d.Kind == "ADB" && d.State == "device" {
-				if a.button(c, "manage", adbIcon, "ADB 操作") {
+				if a.button(c, "manage", toolsIcon, "ADB 操作") {
 					a.openADB(d.Serial)
 				}
 				mirroring := a.engine.isMirroring(d.Serial)
-				label := "打开手机画面"
+				label, screenSymbol := "打开手机画面", screen
 				if mirroring {
-					label = "关闭手机画面"
+					label, screenSymbol = "关闭手机画面", screenOff
 				}
-				if a.button(c, "screen", screen, label) {
+				if a.button(c, "screen", screenSymbol, label) {
 					audio, size, fps := a.audio, a.size, a.fps
 					a.task(func() error {
 						if mirroring {
@@ -307,8 +340,8 @@ func (a *app) deviceView(c *ui.Context) {
 					})
 				}
 			}
-			if d.Kind == "Fastboot" {
-				if a.button(c, "manage", fastbootIcon, "Fastboot 操作") {
+			if d.Kind == "Fastboot" && d.State == "fastboot" {
+				if a.button(c, "manage", toolsIcon, "Fastboot 操作") {
 					a.openFastboot(d.Serial)
 				}
 				if a.button(c, "reboot", restart, "重启设备") {
@@ -323,6 +356,126 @@ func (a *app) deviceView(c *ui.Context) {
 			}
 		})
 	}
+	for _, candidate := range a.fastbootCandidates {
+		candidate := candidate
+		ui.Row(c.Key("pending:"+candidate.Instance)).Padding(14, 16).Gap(12).Radius(10).Background(t.Surface).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, phone).Size(20, 20).TextColor(t.TextMuted)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				ui.Text(c, "Fastboot 设备").Bold()
+				status := "设备已接入 · 尚未匹配 Fastboot 设备"
+				if candidate.Problem != 0 {
+					status = fmt.Sprintf("Windows 驱动异常（代码 %d）", candidate.Problem)
+				} else if candidate.InterfaceMismatch {
+					status = "驱动接口可能不兼容 · 待检查"
+				}
+				if a.fastbootScanError {
+					status = "设备已接入 · 无法验证 Fastboot"
+				}
+				ui.Text(c, candidate.Serial+"  ·  "+status).FontSize(12).TextColor(t.TextMuted).SingleLine()
+			})
+			if a.button(c, "driver-help", infoIcon, "查看驱动与连接指引") {
+				a.driverHelpRevision++
+				a.driverHelpError = ""
+				a.driverTarget = candidate
+				a.driverHelp = true
+			}
+		})
+	}
+	ui.Modal(c, &a.driverHelp, func() {
+		ui.Column(c).Width(400).Gap(12).Children(func() {
+			ui.Text(c, "Fastboot 连接指引").FontSize(16).Bold()
+			ui.Text(c, "Windows 已发现 Fastboot 接口，但官方工具尚未识别。请检查数据线及驱动。")
+			ui.Text(c, "查找微软更新目录中的签名驱动；未匹配时请使用厂商驱动。").FontSize(12).TextColor(t.TextMuted)
+			if a.driverHelpError != "" {
+				ui.Text(c, a.driverHelpError).FontSize(12).TextColor(t.TextMuted)
+			}
+			ui.Row(c).Gap(8).Wrap().Children(func() {
+				if ui.PrimaryButton(c, "查找兼容驱动").Disabled(a.driverLaunching || a.fastbootScanError).Clicked() {
+					a.driverLaunching = true
+					a.driverHelpError = "正在下载并校验驱动…"
+					target, revision := a.driverTarget, a.driverHelpRevision
+					ctx, cancel := context.WithCancel(context.Background())
+					a.driverCancel = cancel
+					go func() {
+						defer cancel()
+						progress := func(message string) {
+							a.win.Update(func() {
+								if a.driverHelp && a.driverHelpRevision == revision {
+									a.driverHelpError = message
+								}
+							})
+						}
+						confirm := func() bool {
+							result := make(chan bool, 1)
+							a.win.Update(func() {
+								if ctx.Err() != nil || !a.driverHelp || a.page != "devices" || a.driverHelpRevision != revision {
+									result <- false
+									return
+								}
+								answer, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Message: "安装匹配的驱动？", Detail: "Windows 可能同时更新其他匹配设备的驱动，需要管理员权限。", Buttons: []string{"安装", "取消"}, DefaultButton: 1, CancelButton: 1})
+								result <- err == nil && answer.Button == 0
+							})
+							select {
+							case accepted := <-result:
+								return accepted
+							case <-ctx.Done():
+								return false
+							}
+						}
+						err := a.engine.installFastbootDriver(ctx, target.Instance, target.Serial, progress, confirm)
+						select {
+						case a.fastbootWake <- struct{}{}:
+						default:
+						}
+						a.win.Update(func() {
+							a.driverLaunching = false
+							a.driverCancel = nil
+							message := "Fastboot 已识别设备。"
+							if errors.Is(err, windows.ERROR_CANCELLED) {
+								message = "已取消权限确认。"
+							} else if err != nil {
+								message = err.Error()
+							}
+							if a.driverHelp && a.driverHelpRevision == revision {
+								a.driverHelpError = message
+							} else {
+								a.message = message
+							}
+						})
+					}()
+				}
+				if ui.Button(c, "设备管理器").Disabled(a.driverLaunching).Clicked() {
+					a.driverLaunching = true
+					a.driverHelpError = ""
+					revision := a.driverHelpRevision
+					go func() {
+						err := openDeviceManager()
+						a.win.Update(func() {
+							a.driverLaunching = false
+							if a.driverHelp && a.driverHelpRevision == revision {
+								a.driverHelpError = deviceManagerError(err)
+							}
+						})
+					}()
+				}
+				if ui.Button(c, "厂商驱动").Clicked() {
+					go func() {
+						if err := mygo.Shell.OpenExternal("https://developer.android.com/studio/run/oem-usb"); err != nil {
+							a.win.Update(func() { a.driverHelpError = "无法打开浏览器，请搜索手机厂商官方驱动。" })
+						}
+					}()
+				}
+				if ui.Button(c, "关闭").Clicked() {
+					if a.driverCancel != nil {
+						a.driverCancel()
+					}
+					a.driverHelpRevision++
+					a.driverHelp = false
+				}
+			})
+		})
+	})
+
 }
 func (a *app) pairView(c *ui.Context) {
 	t := c.Theme()
@@ -516,7 +669,7 @@ func (a *app) pairView(c *ui.Context) {
 	})
 }
 func Run() {
-	a := &app{engine: newEngine(), page: "devices", audio: true, size: "1280", fps: "30"}
+	a := &app{engine: newEngine(), page: "devices", audio: true, size: "1280", fps: "30", fastbootWake: make(chan struct{}, 1)}
 	group, groupErr := newProcessGroup()
 	if groupErr == nil {
 		a.engine.group = group
@@ -553,35 +706,17 @@ func Run() {
 			a.deviceRevision.Add(1)
 			a.win.Update(func() { a.devices = mergeADBEvent(a.devices, ds); a.checkTerminalDevice(); a.reload() })
 		})
-		go func() {
-			ticker := time.NewTicker(3 * time.Second)
-			defer ticker.Stop()
-			var last []device
-			haveLast := false
-			for {
-				select {
-				case <-watchCtx.Done():
-					return
-				case <-ticker.C:
+		go a.engine.watchFastboot(watchCtx, a.fastbootWake, func(snapshot fastbootSnapshot) {
+			a.win.Update(func() {
+				if !snapshot.deviceError {
+					a.fastbootCandidates = snapshot.candidates
 				}
-				ds, err := a.engine.listFastboot()
-				if err != nil {
-					continue
-				}
-				if haveLast && sameFastboot(last, ds) {
-					continue
-				}
-				last = append([]device(nil), ds...)
-				haveLast = true
-				a.win.Update(func() {
-					if !sameFastboot(a.devices, ds) {
-						a.fastbootRevision.Add(1)
-						a.devices = mergeFastboot(a.devices, ds)
-						a.checkTerminalDevice()
-					}
-				})
-			}
-		}()
+				a.fastbootScanError = snapshot.toolError
+				a.fastbootDeviceError = snapshot.deviceError
+				a.devices = mergeFastboot(a.devices, snapshot.devices)
+				a.checkTerminalDevice()
+			})
+		})
 		go func() {
 			err := a.engine.start()
 			a.win.Update(func() {

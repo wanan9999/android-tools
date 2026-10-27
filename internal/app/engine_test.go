@@ -63,7 +63,7 @@ func TestIsolatedOfficialADB(t *testing.T) {
 		t.Fatal("ADB 设备监听没有返回初始状态")
 	}
 	cancel()
-	ds, err := e.list()
+	ds, err := e.adbDevices()
 	if err != nil || len(ds) != 0 {
 		e.stop()
 		t.Fatalf("devices=%+v err=%v", ds, err)

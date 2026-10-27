@@ -178,21 +178,13 @@ func (e *engine) stop() {
 		e.serverDone = nil
 	}
 }
-func (e *engine) list() ([]device, error) {
-	result, adbErr := e.adbDevices()
-	if e.fastboot != "" {
-		fastboot, _ := e.listFastboot()
-		result = append(result, fastboot...)
-	}
-	return result, adbErr
-}
 func (e *engine) adbDevices() ([]device, error) {
 	out, err := e.run(e.adb, 5*time.Second, "", "devices", "-l")
 	return parseADBDevices(out), err
 }
 func (e *engine) listFastboot() ([]device, error) {
 	if e.fastboot == "" {
-		return nil, nil
+		return nil, errors.New("未找到 fastboot.exe")
 	}
 	out, err := e.run(e.fastboot, 5*time.Second, "", "devices", "-l")
 	if err != nil {

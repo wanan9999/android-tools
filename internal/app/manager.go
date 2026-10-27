@@ -353,7 +353,7 @@ func validConnectionAddress(pairAddress, address string) error {
 func (m *manager) refresh() ([]device, []service, error) {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
-	ds, err := m.engine.list()
+	ds, err := m.engine.adbDevices()
 	var services []service
 	if err == nil {
 		services = m.engine.services()
