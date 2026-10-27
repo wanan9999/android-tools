@@ -15,9 +15,6 @@ import (
 //go:embed icon.svg
 var source []byte
 
-//go:embed LUCIDE-LICENSE.txt
-var License []byte
-
 func PNG(size int) ([]byte, error) {
 	icon, err := oksvg.ReadIconStream(bytes.NewReader(source))
 	if err != nil {

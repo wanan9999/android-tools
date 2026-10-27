@@ -21,7 +21,9 @@ go vet ./...
 go run ./cmd/package -out <新文件名>.zip
 ```
 
-构建器和应用按钮共用组件准备逻辑，从官方来源下载并校验固定摘要的 Platform Tools 37.0.1 与 scrcpy 5.0.1；上游包变化时应核对来源并同步更新归档及清单摘要。压缩包包含应用 EXE、独立工具及许可证。应用图标改编自 Lucide 的 smartphone 图标，许可证随包提供。
+构建器和应用按钮共用组件准备逻辑，从官方来源下载并校验固定摘要的 Platform Tools 37.0.1 与 scrcpy 5.0.1；上游包变化时应核对来源并同步更新归档及清单摘要。压缩包包含应用 EXE、独立工具及其许可证。
+
+应用图标改编自 [Lucide smartphone](https://lucide.dev/icons/smartphone)，遵循 [Lucide ISC 与 Feather MIT 许可证](https://github.com/lucide-icons/lucide/blob/main/LICENSE)。
 
 将此工程推送到独立 GitHub 仓库后，可在 Actions 中手动运行“发布 android-tools”，输入未使用的 `v1.2.3` 格式标签。流程测试、构建并发布单个 ZIP；不会自动上传到其他仓库。
 

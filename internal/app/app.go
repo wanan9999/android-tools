@@ -149,12 +149,15 @@ func (a *app) view(c *ui.Context) {
 				ui.Icon(c, phone).Size(19, 19)
 				ui.Text(c, "android-tools").FontSize(15).Bold().Margin(0, 0, 0, 10)
 			})
-			ui.Sidebar(c, &a.page, func() {
+			sidebar := ui.Sidebar(c, &a.page, func() {
 				ui.SidebarSection(c, "设备", nil, func() {
 					ui.SidebarItem(c, "devices", phone, "所有设备")
 					ui.SidebarItem(c, "pair", link, "无线连接")
 				})
 			}).Grow(1)
+			if c.Vibrancy() {
+				sidebar.Background(ui.Transparent)
+			}
 		})
 		ui.Box(c).Width(1).Background(t.Border)
 		ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {

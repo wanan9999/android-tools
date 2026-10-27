@@ -94,7 +94,7 @@ func build(out string) error {
 			return e
 		}
 	}
-	for _, n := range []string{"icon.go", "icon.svg", "LUCIDE-LICENSE.txt"} {
+	for _, n := range []string{"icon.go", "icon.svg"} {
 		content, e := os.ReadFile(filepath.Join("internal", "appicon", n))
 		if e != nil {
 			return e
@@ -165,13 +165,6 @@ func build(out string) error {
 	_, err = io.Copy(app, src)
 	src.Close()
 	if err != nil {
-		return err
-	}
-	license, err := w.Create("licenses/Lucide.txt")
-	if err != nil {
-		return err
-	}
-	if _, err = license.Write(appicon.License); err != nil {
 		return err
 	}
 	files, err := os.ReadDir(toolsDir)

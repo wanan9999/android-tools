@@ -363,3 +363,31 @@ func TestOptionalDeviceDetails(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+func TestSidebarMaterialAndFallback(t *testing.T) {
+	a := &app{engine: newEngine(), page: "devices", size: "1280", fps: "30"}
+	tt := ui.NewTester(a.view, 960, 680)
+	alpha := func(x, y int) uint8 { img := tt.Image(); return img.Pix[img.PixOffset(x, y)+3] }
+	tt.SetVibrancy(true)
+	if top, below, pane := alpha(8, 20), alpha(8, 600), alpha(800, 600); top != 0 || below != 0 || pane != 255 {
+		t.Fatalf("material alpha top=%d sidebar=%d pane=%d", top, below, pane)
+	}
+	tt.SetVibrancy(false)
+	img := tt.Image()
+	top := img.RGBAAt(8, 20)
+	below := img.RGBAAt(8, 600)
+	if top.A != 255 || below.A != 255 || top != below {
+		t.Fatalf("fallback inconsistent top=%v sidebar=%v", top, below)
+	}
+	tt.SetDark(true)
+	tt.SetVibrancy(true)
+	if top, below := alpha(8, 20), alpha(8, 600); top != 0 || below != 0 {
+		t.Fatalf("dark material alpha top=%d sidebar=%d", top, below)
+	}
+	tt.SetVibrancy(false)
+	img = tt.Image()
+	top = img.RGBAAt(8, 20)
+	below = img.RGBAAt(8, 600)
+	if top.A != 255 || below.A != 255 || top != below {
+		t.Fatalf("dark fallback inconsistent top=%v sidebar=%v", top, below)
+	}
+}
