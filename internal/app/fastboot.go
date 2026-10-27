@@ -46,8 +46,11 @@ func (a *app) fastbootView(c *ui.Context) {
 				ui.Text(c, "Fastboot 操作").FontSize(20).Bold()
 				ui.Text(c, a.fastbootSerial).FontSize(12).TextColor(t.TextMuted)
 			})
+			if a.button(c, "terminal", adbIcon, "打开 Fastboot 终端") {
+				a.openTerminal("Fastboot", a.fastbootSerial)
+			}
 		})
-		ui.Column(c).Padding(18).Gap(10).Radius(10).Background(t.Surface).Children(func() {
+		ui.Column(c).Gap(10).Children(func() {
 			ui.Text(c, "设备信息").Bold()
 			if a.fastbootInfoLoading {
 				ui.Text(c, "正在读取设备信息…").FontSize(12).TextColor(t.TextMuted)
@@ -63,7 +66,7 @@ func (a *app) fastbootView(c *ui.Context) {
 				ui.Text(c, a.fastbootOutput).FontSize(12).Selectable()
 			}
 		})
-		ui.Column(c).Padding(18).Gap(10).Radius(10).Background(t.Surface).Children(func() {
+		ui.Column(c).Gap(10).Children(func() {
 			ui.Text(c, "启动选项").Bold()
 			for _, row := range [][]struct{ label, arg string }{{{"重启系统", ""}, {"重启引导程序", "bootloader"}}, {{"进入 Fastbootd", "fastboot"}, {"进入恢复模式", "recovery"}}} {
 				ui.Row(c).Gap(8).Children(func() {
@@ -84,7 +87,7 @@ func (a *app) fastbootView(c *ui.Context) {
 				})
 			}
 		})
-		ui.Column(c).Padding(18).Gap(10).Radius(10).Background(t.Surface).Children(func() {
+		ui.Column(c).Gap(10).Children(func() {
 			ui.Text(c, "刷写镜像").Bold()
 			ui.Text(c, "确认分区、镜像和设备型号匹配；错误操作可能导致设备无法启动。").FontSize(12).TextColor(t.TextMuted)
 			ui.TextInput(c, &a.partition).Placeholder("分区名，例如 boot").Label("目标分区")

@@ -182,8 +182,15 @@ func extract(archive, dest string, s source, m *manifest) error {
 	return nil
 }
 
+func removeArchive(path string, original error) error {
+	if cleanupErr := os.Remove(path); cleanupErr != nil {
+		return errors.Join(original, fmt.Errorf("清理组件下载文件失败：%w", cleanupErr))
+	}
+	return original
+}
+
 // Prepare downloads into a new staging directory, verifies archives and writes a file manifest.
-func Prepare(parent string) (string, error) {
+func Prepare(parent string) (directory string, err error) {
 	stage, e := os.MkdirTemp(parent, ".android-tools-")
 	if e != nil {
 		return "", e
@@ -191,7 +198,9 @@ func Prepare(parent string) (string, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			os.RemoveAll(stage)
+			if cleanupErr := os.RemoveAll(stage); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("清理组件暂存目录失败：%w", cleanupErr))
+			}
 		}
 	}()
 	m := manifest{Files: map[string]string{}}
@@ -201,7 +210,7 @@ func Prepare(parent string) (string, error) {
 			return "", e
 		}
 		e = extract(archive, stage, s, &m)
-		os.Remove(archive)
+		e = removeArchive(archive, e)
 		if e != nil {
 			return "", e
 		}
@@ -239,7 +248,7 @@ func moveNew(from, to string) error {
 }
 
 // Ensure never overwrites a pre-existing tool; missing files are moved atomically.
-func Ensure(parent string) (bool, error) {
+func Ensure(parent string) (changed bool, err error) {
 	target := filepath.Join(parent, Directory)
 	if Check(target) == nil {
 		return false, nil
@@ -248,7 +257,11 @@ func Ensure(parent string) (bool, error) {
 	if e != nil {
 		return false, e
 	}
-	defer os.RemoveAll(stage)
+	defer func() {
+		if cleanupErr := os.RemoveAll(stage); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("清理组件暂存目录失败：%w", cleanupErr))
+		}
+	}()
 	fresh, e := load(stage)
 	if e != nil {
 		return false, e

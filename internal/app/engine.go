@@ -179,14 +179,16 @@ func (e *engine) stop() {
 	}
 }
 func (e *engine) list() ([]device, error) {
-	out, err := e.run(e.adb, 5*time.Second, "", "devices", "-l")
-	adbErr := err
-	result := parseADBDevices(out)
+	result, adbErr := e.adbDevices()
 	if e.fastboot != "" {
 		fastboot, _ := e.listFastboot()
 		result = append(result, fastboot...)
 	}
 	return result, adbErr
+}
+func (e *engine) adbDevices() ([]device, error) {
+	out, err := e.run(e.adb, 5*time.Second, "", "devices", "-l")
+	return parseADBDevices(out), err
 }
 func (e *engine) listFastboot() ([]device, error) {
 	if e.fastboot == "" {
@@ -219,18 +221,6 @@ func validAddress(s string) error {
 		return errors.New("端口无效")
 	}
 	return nil
-}
-func (e *engine) pair(addr, code string) error {
-	if len(code) != 6 {
-		return errors.New("请输入六位配对码")
-	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return errors.New("请输入六位配对码")
-		}
-	}
-	_, err := e.pairSecret(addr, code)
-	return err
 }
 func (e *engine) pairSecret(addr, code string) (string, error) {
 	if err := validAddress(addr); err != nil {
@@ -278,10 +268,10 @@ func (e *engine) services() []service {
 		if len(f) < 3 {
 			continue
 		}
-		kind := f[len(f)-2]
+		kind := strings.TrimSuffix(f[len(f)-2], ".")
 		addr := f[len(f)-1]
-		if (strings.Contains(kind, "_adb-tls-pairing") || strings.Contains(kind, "_adb-tls-connect")) && validAddress(addr) == nil {
-			list = append(list, service{Name: strings.Join(f[:len(f)-2], " "), Kind: kind, Address: addr})
+		if (kind == "_adb-tls-pairing._tcp" || kind == "_adb-tls-connect._tcp") && validAddress(addr) == nil {
+			list = append(list, service{Name: strings.TrimSuffix(strings.Join(f[:len(f)-2], " "), "."), Kind: kind, Address: addr})
 		}
 	}
 	return list

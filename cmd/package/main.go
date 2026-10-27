@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 }
-func build(out string) error {
+func build(out string) (err error) {
 	dest, err := filepath.Abs(out)
 	if err != nil {
 		return err
@@ -36,7 +36,14 @@ func build(out string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(temp)
+	defer func() {
+		if cleanupErr := os.RemoveAll(temp); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("清理构建暂存目录失败：%w", cleanupErr))
+		}
+		if err == nil {
+			fmt.Println("已生成", dest)
+		}
+	}()
 	stage := filepath.Join(temp, "source")
 	if err = os.MkdirAll(filepath.Join(stage, "internal", "appicon"), 0755); err != nil {
 		return err
@@ -148,9 +155,13 @@ func build(out string) error {
 	}
 	ok := false
 	defer func() {
-		f.Close()
 		if !ok {
-			os.Remove(dest)
+			if closeErr := f.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("关闭未完成压缩包失败：%w", closeErr))
+			}
+			if cleanupErr := os.Remove(dest); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+				err = errors.Join(err, fmt.Errorf("清理未完成压缩包失败：%w", cleanupErr))
+			}
 		}
 	}()
 	w := zip.NewWriter(f)
@@ -196,9 +207,13 @@ func build(out string) error {
 		return err
 	}
 	if err = f.Close(); err != nil {
+		// The handle is closed even when Close reports an error.
+		if cleanupErr := os.Remove(dest); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			err = errors.Join(err, fmt.Errorf("清理未完成压缩包失败：%w", cleanupErr))
+		}
+		ok = true
 		return err
 	}
 	ok = true
-	fmt.Println("已生成", dest)
 	return nil
 }

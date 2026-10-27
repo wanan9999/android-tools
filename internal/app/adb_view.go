@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,9 +67,8 @@ func (e *engine) loadDeviceDetails(serial string) deviceDetails {
 		if err == nil {
 			m := batteryLevelPattern.FindStringSubmatch(out)
 			if len(m) > 1 {
-				level := 0
-				fmt.Sscan(m[1], &level)
-				if level >= 0 && level <= 100 {
+				level, parseErr := strconv.Atoi(m[1])
+				if parseErr == nil && level >= 0 && level <= 100 {
 					details.Battery = fmt.Sprintf("%d%%", level)
 				}
 			}
@@ -90,7 +90,12 @@ func (a *app) applyADBInfo(request uint64, serial string, id identity, err error
 	a.adbInfo, a.adbInfoError = id, ""
 }
 
-func (a *app) backToDevices() { a.adbInfoRequest++; a.fastbootInfoRequest++; a.page = "devices" }
+func (a *app) backToDevices() {
+	a.stopTerminal()
+	a.adbInfoRequest++
+	a.fastbootInfoRequest++
+	a.page = "devices"
+}
 
 func (a *app) adbAction(c *ui.Context, label string, symbol *ui.SVG) bool {
 	button := ui.Button(c, "").Grow(1).Height(40).Label(label).Disabled(a.busy)
@@ -109,8 +114,11 @@ func (a *app) adbView(c *ui.Context) {
 				ui.Text(c, "ADB 操作").FontSize(20).Bold()
 				ui.Text(c, a.adbSerial).FontSize(12).TextColor(t.TextMuted).SingleLine()
 			})
+			if a.button(c, "terminal", adbIcon, "打开 ADB 终端") {
+				a.openTerminal("ADB", a.adbSerial)
+			}
 		})
-		ui.Column(c).Padding(20).Gap(12).Radius(10).Background(t.Surface).Children(func() {
+		ui.Column(c).Gap(12).Children(func() {
 			ui.Text(c, "设备信息").Bold()
 			if a.adbInfoLoading {
 				ui.Text(c, "正在读取设备信息…").FontSize(12).TextColor(t.TextMuted)
@@ -142,7 +150,7 @@ func (a *app) adbView(c *ui.Context) {
 				}
 			}
 		})
-		ui.Column(c).Padding(20).Gap(12).Radius(10).Background(t.Surface).Children(func() {
+		ui.Column(c).Gap(12).Children(func() {
 			ui.Text(c, "文件与画面").Bold()
 			ui.Grid(c).Columns(2).Gap(8).Children(func() {
 				if a.adbAction(c, "安装 APK", installIcon) {
@@ -153,7 +161,7 @@ func (a *app) adbView(c *ui.Context) {
 				}
 			})
 		})
-		ui.Column(c).Padding(20).Gap(12).Radius(10).Background(t.Surface).Children(func() {
+		ui.Column(c).Gap(12).Children(func() {
 			ui.Text(c, "电源与启动").Bold()
 			ui.Grid(c).Columns(2).Gap(8).Children(func() {
 				for _, v := range []struct {

@@ -26,8 +26,11 @@ type app struct {
 	services                                           []service
 	selected, page, address, code, connection, message string
 	busy, audio                                        bool
+	mirrorSettings                                     bool
 	flashing                                           bool
+	qrRevision                                         uint64
 	qrActive                                           bool
+	qrConnecting                                       bool
 	qr                                                 *ui.Bitmap
 	qrState, pairGUID, partition                       string
 	fastbootSerial, fastbootOutput                     string
@@ -47,6 +50,7 @@ type app struct {
 	deviceRevision                                     atomic.Uint64
 	fastbootRevision                                   atomic.Uint64
 	pairMode                                           int
+	terminal                                           terminalState
 }
 
 func icon(s string) *ui.SVG {
@@ -56,6 +60,7 @@ func icon(s string) *ui.SVG {
 var phone = icon(`<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/>`)
 var refresh = icon(`<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5 9a7 7 0 0 1 12-3l3 3M19 15a7 7 0 0 1-12 3l-3-3"/>`)
 var plus = icon(`<path d="M12 5v14M5 12h14"/>`)
+var settingsIcon = icon(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 3.1-.2-.1a1.7 1.7 0 0 0-1.8.7l-.1.2h-3.6l-.1-.2a1.7 1.7 0 0 0-1.8-.7l-.2.1-1.8-3.1.1-.1a1.7 1.7 0 0 0 .3-1.9l-.1-.2-3.2-.1V9.9l.2-.1a1.7 1.7 0 0 0 .7-1.8l-.1-.2 3.1-1.8.1.1a1.7 1.7 0 0 0 1.9.3l.2-.1.1-3.2h3.6l.1.2a1.7 1.7 0 0 0 1.8.7l.2-.1 1.8 3.1-.1.1a1.7 1.7 0 0 0-.3 1.9l.1.2 3.2.1v3.6l-.2.1a1.7 1.7 0 0 0-.7 1.8z"/>`)
 var screen = icon(`<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>`)
 var link = icon(`<path d="M10 13a5 5 0 0 0 7 .5l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7-.5l-3 3a5 5 0 0 0 7 7l2-2"/>`)
 var restart = icon(`<path d="M20 7v5h-5M4 12a8 8 0 1 0 2-5"/>`)
@@ -126,7 +131,7 @@ func (a *app) reload() {
 }
 func (a *app) button(c *ui.Context, key string, ico *ui.SVG, label string) bool {
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).Size(34, 34).Radius(8).Center().Label(label).Tooltip(label)
+	b := ui.ButtonBase(c.Key(key)).Size(34, 34).Radius(8).Center().Label(label).Tooltip(label).Transition(ui.ElementTransition{Colors: true, Duration: 120 * time.Millisecond})
 	if b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
@@ -159,6 +164,9 @@ func (a *app) view(c *ui.Context) {
 				sidebar.Background(ui.Transparent)
 			}
 		})
+		if a.page != "terminal" && a.terminal.running {
+			a.stopTerminal()
+		}
 		ui.Box(c).Width(1).Background(t.Border)
 		ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
 			ui.Row(c).Height(52).Shrink(0).Padding(0, bar.Right+16, 0, 20).AlignItems(ui.Center).DragWindow().Children(func() {
@@ -167,6 +175,8 @@ func (a *app) view(c *ui.Context) {
 					title = "无线连接"
 				} else if a.page == "fastboot" {
 					title = "Fastboot"
+				} else if a.page == "terminal" {
+					title = "终端"
 				} else if a.page == "adb" {
 					title = "ADB 设备"
 				}
@@ -174,22 +184,31 @@ func (a *app) view(c *ui.Context) {
 				ui.Box(c).Grow(1)
 			})
 			ui.Divider(c)
-			ui.Scroll(c).Grow(1).Children(func() {
-				ui.Column(c).Padding(22, 24).Gap(16).Children(func() {
+			if a.page == "terminal" {
+				ui.Column(c).Grow(1).MinHeight(0).Padding(22, 24).Gap(12).Children(func() {
 					if a.message != "" {
 						ui.Text(c, a.message).FontSize(12).TextColor(t.TextMuted)
 					}
-					if a.page == "pair" {
-						a.pairView(c)
-					} else if a.page == "fastboot" {
-						a.fastbootView(c)
-					} else if a.page == "adb" {
-						a.adbView(c)
-					} else {
-						a.deviceView(c)
-					}
+					a.terminalView(c)
 				})
-			})
+			} else {
+				ui.Scroll(c).Grow(1).Children(func() {
+					ui.Column(c).Padding(22, 24).Gap(16).Children(func() {
+						if a.message != "" {
+							ui.Text(c, a.message).FontSize(12).TextColor(t.TextMuted)
+						}
+						if a.page == "pair" {
+							a.pairView(c)
+						} else if a.page == "fastboot" {
+							a.fastbootView(c)
+						} else if a.page == "adb" {
+							a.adbView(c)
+						} else {
+							a.deviceView(c)
+						}
+					})
+				})
+			}
 		})
 	})
 }
@@ -199,6 +218,29 @@ func (a *app) deviceView(c *ui.Context) {
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, "设备").FontSize(20).Bold()
 			ui.Text(c, "管理 USB、无线调试和 Fastboot 设备").FontSize(12).TextColor(t.TextMuted)
+		})
+		settings := ui.ButtonBase(c.Key("mirror-settings")).Size(34, 34).Radius(8).Center().Label("投屏设置").Tooltip("投屏设置").Transition(ui.ElementTransition{Colors: true, Duration: 120 * time.Millisecond})
+		if settings.Hovered() {
+			settings.Background(t.SurfaceHover)
+		}
+		settings.Children(func() { ui.Icon(c, settingsIcon).Size(17, 17) })
+		if settings.Clicked() {
+			a.mirrorSettings = !a.mirrorSettings
+		}
+		ui.Popover(c, settings, &a.mirrorSettings, func() {
+			ui.Column(c).Width(220).Padding(10).Gap(12).Children(func() {
+				ui.Text(c, "投屏设置").Bold()
+				ui.Checkbox(c, &a.audio, "转发声音")
+				ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+					ui.Text(c, "画面").Grow(1).FontSize(12).TextColor(t.TextMuted)
+					ui.Select(c, &a.size, []string{"720", "1280", "1920", "2560"}).Width(105).Label("分辨率上限")
+				})
+				ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+					ui.Text(c, "帧率").Grow(1).FontSize(12).TextColor(t.TextMuted)
+					ui.Select(c, &a.fps, []string{"15", "30", "60"}).Width(105).Label("帧率")
+				})
+				ui.Text(c, "下次启动投屏时生效").FontSize(12).TextColor(t.TextMuted)
+			})
 		})
 		if a.button(c, "add", plus, "无线连接") {
 			a.page = "pair"
@@ -220,13 +262,7 @@ func (a *app) deviceView(c *ui.Context) {
 			a.reload()
 		}
 	})
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Checkbox(c, &a.audio, "转发声音")
-		ui.Text(c, "画面").FontSize(12).TextColor(t.TextMuted)
-		ui.Select(c, &a.size, []string{"720", "1280", "1920", "2560"}).Width(95).Label("分辨率上限")
-		ui.Text(c, "帧率").FontSize(12).TextColor(t.TextMuted)
-		ui.Select(c, &a.fps, []string{"15", "30", "60"}).Width(75).Label("帧率")
-	})
+
 	if len(a.devices) == 0 {
 		ui.Column(c).Padding(30).Gap(8).Radius(12).Background(t.Surface).Children(func() {
 			ui.Text(c, "尚未发现设备").Bold()
@@ -296,13 +332,21 @@ func (a *app) pairView(c *ui.Context) {
 		previousMode := a.pairMode
 		ui.Segmented(c, &a.pairMode, "扫码配对", "配对码", "已配对").Label("连接方式")
 		if previousMode != a.pairMode && a.qrActive && a.manager != nil {
+			a.qrRevision++
 			a.manager.cancelPair()
 			a.qr = nil
 			a.qrActive = false
+			a.qrConnecting = false
 			a.qrState = ""
 		}
+		if previousMode != a.pairMode {
+			a.pairGUID = ""
+			a.pairedAddress = ""
+			a.connection = ""
+			a.selected = ""
+		}
 		if a.pairMode == 0 {
-			ui.Column(c).Padding(18).Gap(10).Radius(10).Background(t.Surface).Children(func() {
+			ui.Column(c).Gap(10).Children(func() {
 				ui.Text(c, "使用二维码配对").Bold()
 				ui.Text(c, "在手机无线调试页面选择“使用二维码配对”。二维码 3 分钟内有效。").FontSize(12).TextColor(t.TextMuted)
 				if a.qr != nil {
@@ -312,10 +356,16 @@ func (a *app) pairView(c *ui.Context) {
 					ui.Text(c, a.qrState).FontSize(12).TextColor(t.TextMuted)
 				}
 				ui.Row(c).Gap(8).Children(func() {
-					if ui.Button(c, "生成二维码").Disabled(a.busy).Clicked() && a.manager != nil {
+					if !a.qrActive && ui.Button(c, "生成二维码").Disabled(a.busy).Clicked() && a.manager != nil {
+						a.qrRevision++
+						revision := a.qrRevision
 						payload, err := a.manager.beginQR(func(state, message string) {
 							a.win.Update(func() {
+								if revision != a.qrRevision {
+									return
+								}
 								a.qrState = message
+								a.qrConnecting = state == "connecting"
 								if state != "waiting" {
 									a.qr = nil
 								}
@@ -336,6 +386,7 @@ func (a *app) pairView(c *ui.Context) {
 						}
 						if err != nil {
 							a.message = err.Error()
+							a.qrRevision++
 							a.manager.cancelPair()
 						} else {
 							a.qrState = "等待手机扫码"
@@ -343,16 +394,29 @@ func (a *app) pairView(c *ui.Context) {
 						}
 					}
 					if a.qrActive && ui.Button(c, "取消").Clicked() {
+						a.qrRevision++
 						a.manager.cancelPair()
 						a.qr = nil
 						a.qrActive = false
+						a.qrConnecting = false
 						a.qrState = "已取消"
 					}
 				})
+				if a.qrConnecting {
+					ui.Text(c, "若未自动连接，请在手机返回无线调试首页，填写显示的 IP 和连接端口。").FontSize(12).TextColor(t.TextMuted)
+					ui.TextInput(c, &a.connection).Placeholder("连接 IP:端口").Label("连接地址")
+					if ui.PrimaryButton(c, "连接手机").Clicked() && a.manager != nil {
+						if err := a.manager.submitQRAddress(strings.TrimSpace(a.connection)); err != nil {
+							a.qrState = err.Error()
+						} else {
+							a.qrState = "正在核验并连接手机"
+						}
+					}
+				}
 			})
 		}
 		if a.pairMode == 1 {
-			ui.Column(c).Padding(18).Gap(10).Radius(10).Background(t.Surface).Children(func() {
+			ui.Column(c).Gap(10).Children(func() {
 				ui.Text(c, "1  建立配对").Bold()
 				ui.Text(c, "在手机的无线调试页面打开“使用配对码配对”。").FontSize(12).TextColor(t.TextMuted)
 				ui.TextInput(c, &a.address).Placeholder("配对 IP:端口").Label("配对地址")
@@ -385,12 +449,42 @@ func (a *app) pairView(c *ui.Context) {
 			})
 		}
 		if a.pairMode != 0 {
-			ui.Column(c).Padding(18).Gap(10).Radius(10).Background(t.Surface).Children(func() {
+			ui.Column(c).Gap(10).Children(func() {
 				title := "连接已配对设备"
 				if a.pairMode == 1 {
 					title = "2  连接设备"
 				}
 				ui.Text(c, title).Bold()
+				selectedHardware := ""
+				if a.pairMode == 2 && a.manager != nil {
+					options := []string{"选择已保存设备（可选）"}
+					byLabel := map[string]savedDevice{}
+					for _, d := range a.manager.registry.snapshot() {
+						if d.GUID == "" {
+							continue
+						}
+						name := d.Model
+						if name == "" {
+							name = "Android 设备"
+						}
+						label := name + " · " + d.Hardware
+						options = append(options, label)
+						byLabel[label] = d
+					}
+					if len(options) > 1 {
+						if a.selected == "" {
+							a.selected = options[0]
+						}
+						before := a.selected
+						ui.Select(c, &a.selected, options).Label("已保存设备")
+						if d, ok := byLabel[a.selected]; ok {
+							selectedHardware = d.Hardware
+							if before != a.selected {
+								a.connection = d.Address
+							}
+						}
+					}
+				}
 				ui.Text(c, "返回无线调试首页，输入显示的 IP 和连接端口。").FontSize(12).TextColor(t.TextMuted)
 				ui.TextInput(c, &a.connection).Placeholder("连接 IP:端口").Label("连接地址")
 				if ui.PrimaryButton(c, "连接").Disabled(a.busy).Clicked() {
@@ -402,12 +496,16 @@ func (a *app) pairView(c *ui.Context) {
 					addr := strings.TrimSpace(a.connection)
 					guid := a.pairGUID
 					pairAddress := a.pairedAddress
+					hardware := selectedHardware
 					a.task(func() error {
 						if err := validConnectionAddress(pairAddress, addr); err != nil {
 							return err
 						}
 						if a.manager == nil {
 							return errors.New("设备记录不可用")
+						}
+						if hardware != "" {
+							return a.manager.connectKnown(addr, hardware)
 						}
 						return a.manager.connect(addr, guid)
 					})
@@ -453,7 +551,7 @@ func Run() {
 		})
 		go a.engine.trackADB(watchCtx, func(ds []device) {
 			a.deviceRevision.Add(1)
-			a.win.Update(func() { a.devices = mergeADBEvent(a.devices, ds); a.reload() })
+			a.win.Update(func() { a.devices = mergeADBEvent(a.devices, ds); a.checkTerminalDevice(); a.reload() })
 		})
 		go func() {
 			ticker := time.NewTicker(3 * time.Second)
@@ -479,6 +577,7 @@ func Run() {
 					if !sameFastboot(a.devices, ds) {
 						a.fastbootRevision.Add(1)
 						a.devices = mergeFastboot(a.devices, ds)
+						a.checkTerminalDevice()
 					}
 				})
 			}
@@ -511,6 +610,7 @@ func Run() {
 	if err := mygo.App.Run(); err != nil {
 		log.Print(err)
 	}
+	a.stopTerminal()
 	close(stopping)
 	stopWatch()
 	if a.manager != nil {

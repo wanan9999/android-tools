@@ -1,9 +1,6 @@
 package app
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -171,8 +169,10 @@ func parseIdentity(serial, out string) (identity, error) {
 		}
 		guid = transport
 	}
-	sdk := 0
-	fmt.Sscan(p["ro.build.version.sdk"], &sdk)
+	sdk, err := strconv.Atoi(p["ro.build.version.sdk"])
+	if err != nil || sdk <= 0 {
+		sdk = 0
+	}
 	return identity{Hardware: h, GUID: guid, Model: p["ro.product.model"], Brand: p["ro.product.brand"], Manufacturer: p["ro.product.manufacturer"], Device: p["ro.product.device"], Android: p["ro.build.version.release"], SecurityPatch: p["ro.build.version.security_patch"], BuildID: p["ro.build.display.id"], ABI: p["ro.product.cpu.abilist"], SDK: sdk}, nil
 }
 func (e *engine) identify(serial string) (identity, error) {
@@ -188,7 +188,7 @@ func (e *engine) checkedIdentity(serial, guid, hardware string) (identity, error
 		return id, err
 	}
 	if id.GUID == "" && guid != "" {
-		ds, err := e.list()
+		ds, err := e.adbDevices()
 		if err != nil {
 			return id, err
 		}
@@ -222,24 +222,35 @@ func (e *engine) checkedIdentity(serial, guid, hardware string) (identity, error
 	return id, nil
 }
 func (e *engine) connectVerified(addr, guid, hardware string) (identity, error) {
+	devices, _ := e.adbDevices()
+	existing := false
+	for _, d := range devices {
+		if d.Serial == addr && d.State == "device" {
+			existing = true
+			break
+		}
+	}
 	if err := e.connect(addr); err != nil {
 		return identity{}, err
 	}
 	id, err := e.checkedIdentity(addr, guid, hardware)
 	if err != nil {
-		_, _ = e.run(e.adb, 4*time.Second, "", "disconnect", addr)
+		if !existing {
+			_, _ = e.run(e.adb, 4*time.Second, "", "disconnect", addr)
+		}
 		return identity{}, err
 	}
 	return id, nil
 }
 
 type manager struct {
-	engine     *engine
-	registry   *registry
-	mu         sync.Mutex
-	refreshMu  sync.Mutex
-	cancel     context.CancelFunc
-	generation uint64
+	engine       *engine
+	registry     *registry
+	mu           sync.Mutex
+	refreshMu    sync.Mutex
+	pair         *pairSession
+	generation   uint64
+	pairInterval time.Duration
 }
 
 func newManager(e *engine, r *registry) *manager {
@@ -248,25 +259,71 @@ func newManager(e *engine, r *registry) *manager {
 func (m *manager) remember(id identity, address string) error {
 	return m.registry.save(savedDevice{Hardware: id.Hardware, GUID: id.GUID, Model: id.Model, Address: address})
 }
+func wirelessSDKError(sdk int) error {
+	if sdk <= 0 {
+		return errors.New("无法读取手机 Android SDK 版本，请检查设备授权")
+	}
+	if sdk < 30 {
+		return errors.New("无线配对需要 Android 11 或以上")
+	}
+	return nil
+}
 func (m *manager) connect(addr, guid string) error {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 	var expected string
-	for _, d := range m.registry.snapshot() {
+	known := m.registry.snapshot()
+	for _, d := range known {
+		if guid != "" && d.GUID == guid {
+			expected = d.Hardware
+			break
+		}
+	}
+	for _, d := range known {
 		if d.Address == addr {
+			if expected != "" && expected != d.Hardware {
+				return errors.New("连接地址属于另一台已登记手机")
+			}
 			expected = d.Hardware
 			if guid == "" {
 				guid = d.GUID
 			}
-			break
 		}
 	}
 	id, err := m.engine.connectVerified(addr, guid, expected)
 	if err != nil {
 		return err
 	}
-	if guid != "" && id.SDK < 30 {
-		return errors.New("无线配对需要 Android 11 或以上")
+	if guid != "" {
+		if err := wirelessSDKError(id.SDK); err != nil {
+			return err
+		}
+	}
+	return m.remember(id, addr)
+}
+func (m *manager) connectKnown(addr, hardware string) error {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	var record *savedDevice
+	for _, d := range m.registry.snapshot() {
+		if d.Hardware == hardware {
+			d := d
+			record = &d
+			break
+		}
+	}
+	if record == nil {
+		return errors.New("原设备记录不存在，请重新选择")
+	}
+	if record.GUID == "" {
+		return errors.New("该设备没有无线身份，请先配对")
+	}
+	id, err := m.engine.connectVerified(addr, record.GUID, record.Hardware)
+	if err != nil {
+		return err
+	}
+	if err := wirelessSDKError(id.SDK); err != nil {
+		return err
 	}
 	return m.remember(id, addr)
 }
@@ -335,9 +392,22 @@ func (m *manager) refresh() ([]device, []service, error) {
 		if id.Model != "" {
 			d.Model = id.Model
 		}
-		if !strings.Contains(d.Serial, ":") && !strings.Contains(d.Serial, "._adb-tls-connect._tcp") {
-			if e := m.remember(id, ""); e != nil {
-				return nil, services, e
+		wireless := strings.Contains(d.Serial, ":") || strings.Contains(d.Serial, "._adb-tls-connect._tcp")
+		if !wireless || id.GUID != "" {
+			address := ""
+			if wireless && validAddress(d.Serial) == nil {
+				address = d.Serial
+			} else if wireless {
+				for _, service := range services {
+					if strings.Contains(service.Kind, "_adb-tls-connect") && serviceGUID(service.Name) == id.GUID {
+						address = service.Address
+						break
+					}
+				}
+			}
+			if e := m.remember(id, address); e != nil {
+				d.State = "identity_error"
+				delete(online, id.Hardware)
 			}
 		}
 		result = append(result, d)
@@ -389,111 +459,4 @@ func (m *manager) forget(hardware string) error {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 	return m.registry.remove(hardware)
-}
-func randomHex(n int) (string, error) {
-	b := make([]byte, n)
-	_, err := rand.Read(b)
-	return hex.EncodeToString(b), err
-}
-func (m *manager) cancelPair() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.generation++
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
-	}
-}
-func (m *manager) beginQR(notify func(string, string)) (string, error) {
-	m.cancelPair()
-	serviceID, err := randomHex(8)
-	if err != nil {
-		return "", err
-	}
-	secret, err := randomHex(18)
-	if err != nil {
-		return "", err
-	}
-	serviceName := "studio-" + serviceID
-	payload := "WIFI:T:ADB;S:" + serviceName + ";P:" + secret + ";;"
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	m.mu.Lock()
-	m.generation++
-	gen := m.generation
-	m.cancel = cancel
-	m.mu.Unlock()
-	go func() {
-		defer cancel()
-		publish := func(state, msg string) {
-			m.mu.Lock()
-			current := m.generation == gen
-			m.mu.Unlock()
-			if current {
-				notify(state, msg)
-			}
-		}
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					publish("expired", "二维码已过期，请重新生成")
-				}
-				return
-			case <-ticker.C:
-				for _, s := range m.engine.services() {
-					if !strings.Contains(s.Kind, "_adb-tls-pairing") || s.Name != serviceName {
-						continue
-					}
-					publish("pairing", "正在建立配对")
-					guid, err := m.engine.pairSecret(s.Address, secret)
-					secret = ""
-					if ctx.Err() != nil {
-						return
-					}
-					if err != nil {
-						publish("error", err.Error())
-						return
-					}
-					publish("connecting", "配对成功，正在查找连接地址")
-					for {
-						select {
-						case <-ctx.Done():
-							publish("expired", "连接已超时，请手动输入无线调试首页的地址")
-							return
-						case <-ticker.C:
-							for _, v := range m.engine.services() {
-								if strings.Contains(v.Kind, "_adb-tls-connect") && serviceGUID(v.Name) == guid {
-									m.refreshMu.Lock()
-									id, err := m.engine.connectVerified(v.Address, guid, "")
-									m.mu.Lock()
-									if ctx.Err() != nil || m.generation != gen {
-										m.mu.Unlock()
-										m.refreshMu.Unlock()
-										return
-									}
-									if err == nil && id.SDK < 30 {
-										err = errors.New("无线配对需要 Android 11 或以上")
-									}
-									if err == nil {
-										err = m.remember(id, v.Address)
-									}
-									m.mu.Unlock()
-									m.refreshMu.Unlock()
-									if err != nil {
-										publish("error", err.Error())
-									} else {
-										publish("connected", "连接成功，设备身份已核验")
-									}
-									return
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}()
-	return payload, nil
 }

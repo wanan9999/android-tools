@@ -253,6 +253,11 @@ func TestPairPreview(t *testing.T) {
 		return
 	}
 	a := &app{engine: newEngine(), page: "pair", size: "1280", fps: "30"}
+	if os.Getenv("ANDROID_TOOLS_PAIR_CONNECTED_PREVIEW") == "1" {
+		a.qrActive = true
+		a.qrConnecting = true
+		a.qrState = "配对成功，正在连接；未自动发现时可填写无线调试首页的连接地址"
+	}
 	tt := ui.NewTester(a.view, 960, 680)
 	f, err := os.Create(path)
 	if err != nil {
@@ -389,5 +394,33 @@ func TestSidebarMaterialAndFallback(t *testing.T) {
 	below = img.RGBAAt(8, 600)
 	if top.A != 255 || below.A != 255 || top != below {
 		t.Fatalf("dark fallback inconsistent top=%v sidebar=%v", top, below)
+	}
+}
+
+func TestInvalidDeviceNumbers(t *testing.T) {
+	for _, value := range []string{"", "34junk", "-1", "999999999999999999999999999999999999"} {
+		raw := strings.Replace(props("physical", "guid"), "[ro.build.version.sdk]: [34]", "[ro.build.version.sdk]: ["+value+"]", 1)
+		id, err := parseIdentity("usb", raw)
+		if err != nil || id.SDK != 0 {
+			t.Fatalf("sdk %q: %+v %v", value, id, err)
+		}
+		if err := wirelessSDKError(id.SDK); err == nil || !strings.Contains(err.Error(), "无法读取") {
+			t.Fatalf("sdk diagnostic: %v", err)
+		}
+	}
+	if err := wirelessSDKError(29); err == nil || !strings.Contains(err.Error(), "Android 11") {
+		t.Fatal(err)
+	}
+	if err := wirelessSDKError(30); err != nil {
+		t.Fatal(err)
+	}
+	e := &engine{adb: "adb", execute: func(_ string, _ time.Duration, _ string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "dumpsys battery") {
+			return "  level: 9999999999999999999999999999999999999\n", nil
+		}
+		return "", nil
+	}}
+	if got := e.loadDeviceDetails("usb").Battery; got != "" {
+		t.Fatalf("invalid battery = %q", got)
 	}
 }

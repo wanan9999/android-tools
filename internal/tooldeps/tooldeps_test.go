@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +110,27 @@ func TestOfficialDownload(t *testing.T) {
 	}
 	if e = Check(filepath.Join(parent, Directory)); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestArchiveCleanupFailurePreservesOriginalError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "entry"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	original := errors.New("解压失败")
+	err := removeArchive(dir, original)
+	if !errors.Is(err, original) || !strings.Contains(err.Error(), "清理组件下载文件失败") {
+		t.Fatalf("missing errors: %v", err)
+	}
+	file := filepath.Join(dir, "archive.zip")
+	if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeArchive(file, original); !errors.Is(err, original) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("archive remains")
 	}
 }
