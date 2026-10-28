@@ -58,6 +58,7 @@ func (m *manager) submitQRAddress(address string) error {
 	}
 }
 func (m *manager) commitPair(ctx context.Context, gen uint64, serial, address, guid, hardware string, connect bool) error {
+	m.identityEpoch.Add(1)
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 	var id identity

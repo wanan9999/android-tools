@@ -64,7 +64,7 @@ func (e *engine) run(tool string, timeout time.Duration, input string, args ...s
 		return e.execute(tool, timeout, input, args...)
 	}
 	if tool == "" {
-		return "", errors.New("未找到组件，请点击检查并下载组件")
+		return "", errors.New("未找到组件，请在应用设置中检查并下载")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -97,10 +97,10 @@ func (e *engine) start() error {
 		}
 	}
 	if e.adb == "" {
-		return errors.New("未找到 adb.exe，请点击检查并下载组件")
+		return errors.New("未找到 adb.exe，请在应用设置中检查并下载")
 	}
 	if _, err := os.Stat(e.adb); err != nil {
-		return errors.New("未找到 adb.exe，请点击检查并下载组件")
+		return errors.New("未找到 adb.exe，请在应用设置中检查并下载")
 	}
 	address := strings.TrimPrefix(e.socketAddress(), "tcp:")
 	l, err := net.Listen("tcp", address)
@@ -268,7 +268,7 @@ func (e *engine) services() []service {
 	}
 	return list
 }
-func (e *engine) mirror(serial string, audio bool, size, fps string) error {
+func (e *engine) mirror(serial string, audio bool, size, fps, bitrate string) error {
 	if e.scrcpy == "" {
 		return errors.New("未找到 scrcpy.exe，请放在程序目录或 scrcpy 文件夹")
 	}
@@ -283,9 +283,9 @@ func (e *engine) mirror(serial string, audio bool, size, fps string) error {
 	if fps != "15" && fps != "30" && fps != "60" {
 		return errors.New("画面帧率无效")
 	}
-	args := []string{"--serial", serial, "--max-size", size, "--max-fps", fps}
-	if !audio {
-		args = append(args, "--no-audio")
+	args, err := mirrorArgs(serial, audio, size, fps, bitrate)
+	if err != nil {
+		return err
 	}
 	cmd := e.command(context.Background(), e.scrcpy, args...)
 	if err := cmd.Start(); err != nil {
@@ -315,6 +315,20 @@ func (e *engine) mirror(serial string, audio bool, size, fps string) error {
 		e.mu.Unlock()
 	}()
 	return nil
+}
+
+func mirrorArgs(serial string, audio bool, size, fps, bitrate string) ([]string, error) {
+	if !validBitrate(bitrate) {
+		return nil, errors.New("视频码率无效")
+	}
+	args := []string{"--serial", serial, "--max-size", size, "--max-fps", fps}
+	if bitrate != "8 Mbps" {
+		args = append(args, "--video-bit-rate", strings.TrimSuffix(bitrate, " Mbps")+"M")
+	}
+	if !audio {
+		args = append(args, "--no-audio")
+	}
+	return args, nil
 }
 func (e *engine) isMirroring(serial string) bool {
 	e.mu.Lock()

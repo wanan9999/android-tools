@@ -8,12 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"android-tools/internal/appicon"
-	"android-tools/internal/tooldeps"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	qrcode "github.com/skip2/go-qrcode"
@@ -38,7 +39,6 @@ type app struct {
 	driverCancel                                       context.CancelFunc
 	selected, page, address, code, connection, message string
 	busy, audio                                        bool
-	mirrorSettings                                     bool
 	flashing                                           bool
 	qrRevision                                         uint64
 	qrActive                                           bool
@@ -56,13 +56,19 @@ type app struct {
 	adbDetails                                         deviceDetails
 	adbInfoError                                       string
 	adbInfoLoading                                     bool
+	adbInfoOpen                                        bool
 	adbInfoRequest                                     uint64
-	size, fps                                          string
+	size, fps, bitrate                                 string
 	refreshing                                         atomic.Bool
 	pendingRefresh                                     atomic.Bool
 	deviceRevision                                     atomic.Uint64
 	pairMode                                           int
 	terminal                                           terminalState
+	files                                              fileState
+	preferencesQueue                                   chan preferences
+	preferencesDone                                    chan struct{}
+	refreshSnapshotMu                                  sync.Mutex
+	refreshSnapshot                                    refreshSnapshot
 }
 
 func icon(s string) *ui.SVG {
@@ -77,7 +83,7 @@ var screenOff = icon(`<path d="M12 17v4M17 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 1.184-
 var wifiIcon = icon(`<path d="M12 20h.01M2 8.82a15 15 0 0 1 20 0M5 12.859a10 10 0 0 1 14 0M8.5 16.429a5 5 0 0 1 7 0"/>`)
 var restart = icon(`<path d="M20 7v5h-5M4 12a8 8 0 1 0 2-5"/>`)
 var terminalIcon = icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/>`)
-var toolsIcon = icon(`<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>`)
+var actionsIcon = icon(`<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>`)
 var closeIcon = icon(`<path d="M18 6 6 18M6 6l12 12"/>`)
 var backIcon = icon(`<path d="M19 12H5m0 0 6-6m-6 6 6 6"/>`)
 var apkIcon = icon(`<path d="M4 11V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1M14 2v5a1 1 0 0 0 1 1h5M2 15h10m-3 3 3-3-3-3"/>`)
@@ -87,7 +93,6 @@ var bootIcon = icon(`<path d="m10 17 5-5-5-5M15 12H3M12 3h6a2 2 0 0 1 2 2v14a2 2
 var recoveryIcon = icon(`<circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24m5.66 0 4.24-4.24m-4.24 9.9 4.24 4.24m-9.9-4.24-4.24 4.24"/><circle cx="12" cy="12" r="4"/>`)
 var trash = icon(`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/>`)
 var infoIcon = icon(`<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>`)
-var downloadIcon = icon(`<path d="M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3"/>`)
 
 func (a *app) task(fn func() error) {
 	a.taskMessage(fn, "操作完成")
@@ -127,6 +132,13 @@ func (a *app) reload() {
 			}
 		}()
 		ds, ss, err := a.manager.refresh()
+		errorText := ""
+		if err != nil {
+			errorText = err.Error()
+		}
+		if !a.changedRefresh(revision, ds, ss, errorText) {
+			return
+		}
 		a.win.Update(func() {
 			if revision == a.deviceRevision.Load() {
 				ds = mergeFastboot(ds, fastbootDevices(a.devices))
@@ -141,6 +153,26 @@ func (a *app) reload() {
 		})
 	}()
 }
+
+type refreshSnapshot struct {
+	valid     bool
+	revision  uint64
+	devices   []device
+	services  []service
+	errorText string
+}
+
+func (a *app) changedRefresh(revision uint64, devices []device, services []service, errorText string) bool {
+	a.refreshSnapshotMu.Lock()
+	defer a.refreshSnapshotMu.Unlock()
+	prev := a.refreshSnapshot
+	if prev.valid && prev.revision == revision && prev.errorText == errorText && slices.Equal(prev.devices, devices) && slices.Equal(prev.services, services) {
+		return false
+	}
+	a.refreshSnapshot = refreshSnapshot{valid: true, revision: revision, devices: append([]device(nil), devices...), services: append([]service(nil), services...), errorText: errorText}
+	return true
+}
+
 func (a *app) button(c *ui.Context, key string, ico *ui.SVG, label string) bool {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).Size(34, 34).Radius(8).Center().Label(label).Tooltip(label).Transition(ui.ElementTransition{Colors: true, Duration: 120 * time.Millisecond})
@@ -150,6 +182,16 @@ func (a *app) button(c *ui.Context, key string, ico *ui.SVG, label string) bool 
 	b.Children(func() { ui.Icon(c, ico).Size(17, 17) })
 	return b.Clicked()
 }
+func (a *app) headerButton(c *ui.Context, key string, ico *ui.SVG, label string) bool {
+	t := c.Theme()
+	b := ui.ButtonBase(c.Key(key)).Size(38, 38).Radius(8).Center().Background(t.Surface).Label(label).Tooltip(label).Transition(ui.ElementTransition{Colors: true, Duration: 120 * time.Millisecond})
+	if b.Hovered() {
+		b.Background(t.SurfaceHover)
+	}
+	b.Children(func() { ui.Icon(c, ico).Size(19, 19) })
+	return b.Clicked()
+}
+
 func (a *app) view(c *ui.Context) {
 	t := c.Theme()
 	if c.Vibrancy() {
@@ -170,6 +212,9 @@ func (a *app) view(c *ui.Context) {
 				ui.SidebarSection(c, "设备", nil, func() {
 					ui.SidebarItem(c, "devices", phone, "所有设备")
 					ui.SidebarItem(c, "pair", wifiIcon, "无线连接")
+				})
+				ui.SidebarSection(c, "应用", nil, func() {
+					ui.SidebarItem(c, "settings", settingsIcon, "应用设置")
 				})
 			}).Grow(1)
 			if c.Vibrancy() {
@@ -192,6 +237,10 @@ func (a *app) view(c *ui.Context) {
 					title = "Fastboot"
 				} else if a.page == "terminal" {
 					title = "终端"
+				} else if a.page == "files" {
+					title = "文件管理"
+				} else if a.page == "settings" {
+					title = "应用设置"
 				} else if a.page == "adb" {
 					title = "ADB 设备"
 				}
@@ -199,12 +248,16 @@ func (a *app) view(c *ui.Context) {
 				ui.Box(c).Grow(1)
 			})
 			ui.Divider(c)
-			if a.page == "terminal" {
+			if a.page == "terminal" || a.page == "files" {
 				ui.Column(c).Grow(1).MinHeight(0).Padding(22, 24).Gap(12).Children(func() {
 					if a.message != "" {
 						ui.Text(c, a.message).FontSize(12).TextColor(t.TextMuted)
 					}
-					a.terminalView(c)
+					if a.page == "files" {
+						a.filesView(c)
+					} else {
+						a.terminalView(c)
+					}
 				})
 			} else {
 				ui.Scroll(c).Grow(1).Children(func() {
@@ -216,6 +269,8 @@ func (a *app) view(c *ui.Context) {
 							a.pairView(c)
 						} else if a.page == "fastboot" {
 							a.fastbootView(c)
+						} else if a.page == "settings" {
+							a.settingsView(c)
 						} else if a.page == "adb" {
 							a.adbView(c)
 						} else {
@@ -234,53 +289,13 @@ func (a *app) deviceView(c *ui.Context) {
 			ui.Text(c, "设备").FontSize(20).Bold()
 			ui.Text(c, "管理 USB、无线调试和 Fastboot 设备").FontSize(12).TextColor(t.TextMuted)
 		})
-		settings := ui.ButtonBase(c.Key("mirror-settings")).Size(34, 34).Radius(8).Center().Label("投屏设置").Tooltip("投屏设置").Transition(ui.ElementTransition{Colors: true, Duration: 120 * time.Millisecond})
-		if settings.Hovered() {
-			settings.Background(t.SurfaceHover)
-		}
-		settings.Children(func() { ui.Icon(c, settingsIcon).Size(17, 17) })
-		if settings.Clicked() {
-			a.mirrorSettings = !a.mirrorSettings
-		}
-		ui.Popover(c, settings, &a.mirrorSettings, func() {
-			ui.Column(c).Width(220).Padding(10).Gap(12).Children(func() {
-				ui.Text(c, "投屏设置").Bold()
-				ui.Checkbox(c, &a.audio, "转发声音")
-				ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-					ui.Text(c, "画面").Grow(1).FontSize(12).TextColor(t.TextMuted)
-					ui.Select(c, &a.size, []string{"720", "1280", "1920", "2560"}).Width(105).Label("分辨率上限")
-				})
-				ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-					ui.Text(c, "帧率").Grow(1).FontSize(12).TextColor(t.TextMuted)
-					ui.Select(c, &a.fps, []string{"15", "30", "60"}).Width(105).Label("帧率")
-				})
-				ui.Text(c, "下次启动投屏时生效").FontSize(12).TextColor(t.TextMuted)
-			})
-		})
 		if a.button(c, "add", wifiIcon, "无线连接") {
 			a.page = "pair"
 		}
-		if a.button(c, "tools", downloadIcon, "检查并下载组件") {
-			a.taskMessage(func() error {
-				exe, err := os.Executable()
-				if err != nil {
-					return err
-				}
-				_, err = tooldeps.Ensure(filepath.Dir(exe))
-				if err != nil {
-					return err
-				}
-				if err := a.engine.start(); err != nil {
-					return err
-				}
-				select {
-				case a.fastbootWake <- struct{}{}:
-				default:
-				}
-				return nil
-			}, "组件检查完成")
-		}
 		if a.button(c, "refresh", refresh, "刷新设备") {
+			if a.manager != nil {
+				a.manager.identityEpoch.Add(1)
+			}
 			select {
 			case a.fastbootWake <- struct{}{}:
 			default:
@@ -322,7 +337,7 @@ func (a *app) deviceView(c *ui.Context) {
 				}
 			})
 			if d.Kind == "ADB" && d.State == "device" {
-				if a.button(c, "manage", toolsIcon, "ADB 操作") {
+				if a.button(c, "manage", actionsIcon, "ADB 操作") {
 					a.openADB(d.Serial)
 				}
 				mirroring := a.engine.isMirroring(d.Serial)
@@ -331,17 +346,17 @@ func (a *app) deviceView(c *ui.Context) {
 					label, screenSymbol = "关闭手机画面", screenOff
 				}
 				if a.button(c, "screen", screenSymbol, label) {
-					audio, size, fps := a.audio, a.size, a.fps
+					audio, size, fps, bitrate := a.audio, a.size, a.fps, a.bitrate
 					a.task(func() error {
 						if mirroring {
 							return a.engine.stopMirror(d.Serial)
 						}
-						return a.engine.mirror(d.Serial, audio, size, fps)
+						return a.engine.mirror(d.Serial, audio, size, fps, bitrate)
 					})
 				}
 			}
 			if d.Kind == "Fastboot" && d.State == "fastboot" {
-				if a.button(c, "manage", toolsIcon, "Fastboot 操作") {
+				if a.button(c, "manage", actionsIcon, "Fastboot 操作") {
 					a.openFastboot(d.Serial)
 				}
 				if a.button(c, "reboot", restart, "重启设备") {
@@ -669,7 +684,23 @@ func (a *app) pairView(c *ui.Context) {
 	})
 }
 func Run() {
-	a := &app{engine: newEngine(), page: "devices", audio: true, size: "1280", fps: "30", fastbootWake: make(chan struct{}, 1)}
+	mygo.App.SetName("android-tools")
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	a := &app{engine: newEngine(), page: "devices", audio: true, size: "1280", fps: "30", bitrate: "8 Mbps", fastbootWake: make(chan struct{}, 1)}
+	pendingShow := false
+	mygo.App.OnSecondInstance(func(_ []string, _ string) {
+		if a.win == nil {
+			pendingShow = true
+			return
+		}
+		if a.win.IsMinimized() {
+			a.win.Restore()
+		}
+		a.win.Show()
+		a.win.Focus()
+	})
 	group, groupErr := newProcessGroup()
 	if groupErr == nil {
 		a.engine.group = group
@@ -685,6 +716,8 @@ func Run() {
 		reg, err = openRegistry(filepath.Join(dir, "android-tools", "devices.json"))
 		if err == nil {
 			a.manager = newManager(a.engine, reg)
+			prefs := reg.preferences()
+			a.audio, a.size, a.fps, a.bitrate = prefs.Audio, prefs.Size, prefs.FPS, prefs.Bitrate
 		}
 	}
 	if err != nil {
@@ -692,18 +725,35 @@ func Run() {
 	}
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{Title: "android-tools", Width: 960, Height: 680, MinWidth: 640, MinHeight: 480, TitleBarStyle: mygo.TitleBarHiddenInset, TitleBarHeight: 52, Vibrancy: mygo.VibrancyMica, Content: ui.View(a.view)})
+		if pendingShow {
+			a.win.Show()
+			a.win.Focus()
+			pendingShow = false
+		}
+		if a.manager != nil {
+			a.preferencesQueue = make(chan preferences, 1)
+			a.preferencesDone = make(chan struct{})
+			go a.writePreferencesLoop()
+		}
 		if iconPNG, err := appicon.PNG(256); err == nil {
 			_ = a.win.SetIcon(iconPNG)
 		}
 		a.win.OnClose(func(e *mygo.CloseEvent) {
-			if a.flashing {
+			if a.flashing || a.files.busy {
 				e.PreventDefault()
-				a.message = "正在刷写，请等待操作结束后退出"
+				if a.flashing {
+					a.message = "正在刷写，请等待操作结束后退出"
+				} else {
+					a.message = "正在处理文件，请等待操作结束后退出"
+				}
 				a.win.Invalidate()
 			}
 		})
 		go a.engine.trackADB(watchCtx, func(ds []device) {
 			a.deviceRevision.Add(1)
+			if a.manager != nil {
+				a.manager.identityEpoch.Add(1)
+			}
 			a.win.Update(func() { a.devices = mergeADBEvent(a.devices, ds); a.checkTerminalDevice(); a.reload() })
 		})
 		go a.engine.watchFastboot(watchCtx, a.fastbootWake, func(snapshot fastbootSnapshot) {
@@ -746,6 +796,10 @@ func Run() {
 		log.Print(err)
 	}
 	a.stopTerminal()
+	if a.preferencesQueue != nil {
+		close(a.preferencesQueue)
+		<-a.preferencesDone
+	}
 	close(stopping)
 	stopWatch()
 	if a.manager != nil {

@@ -120,3 +120,24 @@ func TestFindToolPrefersUnifiedDirectory(t *testing.T) {
 		t.Fatal("unexpected tool path")
 	}
 }
+
+func TestMirrorBitrateArguments(t *testing.T) {
+	for _, tc := range []struct{ bitrate, want string }{{"8 Mbps", ""}, {"12 Mbps", "12M"}, {"16 Mbps", "16M"}, {"24 Mbps", "24M"}} {
+		args, err := mirrorArgs("serial", true, "1280", "30", tc.bitrate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		for i, v := range args {
+			if v == "--video-bit-rate" && i+1 < len(args) {
+				got = args[i+1]
+			}
+		}
+		if got != tc.want {
+			t.Fatalf("%q: got %q want %q", tc.bitrate, got, tc.want)
+		}
+	}
+	if _, err := mirrorArgs("serial", true, "1280", "30", "bad"); err == nil {
+		t.Fatal("invalid bitrate accepted")
+	}
+}

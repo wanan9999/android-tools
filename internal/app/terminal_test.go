@@ -62,7 +62,7 @@ func TestTerminalOutputAndDevice(t *testing.T) {
 	if !tt.HasText("ADB 终端") {
 		t.Fatal(tt.Texts())
 	}
-	if _, ok := tt.Find("执行命令"); !ok {
+	if _, ok := tt.Find("发送命令"); !ok {
 		t.Fatal("missing execute")
 	}
 }
@@ -143,15 +143,18 @@ func TestTerminalResponsiveLayout(t *testing.T) {
 	}
 }
 func TestMirrorSettingsAreOnDemand(t *testing.T) {
-	a := &app{engine: newEngine(), page: "devices", size: "1280", fps: "30", audio: true}
+	a := &app{engine: newEngine(), page: "devices", size: "1280", fps: "30", bitrate: "8 Mbps", audio: true}
 	tt := ui.NewTester(a.view, 960, 680)
 	if tt.HasText("转发声音") {
 		t.Fatal("settings visible in device list")
 	}
-	if err := tt.Click("投屏设置"); err != nil {
+	if err := tt.Click("应用设置"); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"转发声音", "分辨率上限", "帧率"} {
+	if a.page != "settings" {
+		t.Fatalf("settings page not opened: %s", a.page)
+	}
+	for _, label := range []string{"转发声音", "分辨率上限", "帧率", "视频码率", "检查并下载组件"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Errorf("missing %s", label)
 		}
@@ -180,9 +183,9 @@ func TestMirrorSettingsPreview(t *testing.T) {
 	if path == "" {
 		return
 	}
-	a := &app{engine: newEngine(), page: "devices", size: "1280", fps: "30", audio: true, devices: []device{{Kind: "ADB", Serial: "example", State: "device", Model: "Pixel"}}}
+	a := &app{engine: newEngine(), page: "devices", size: "1280", fps: "30", bitrate: "8 Mbps", audio: true, devices: []device{{Kind: "ADB", Serial: "example", State: "device", Model: "Pixel"}}}
 	tt := ui.NewTester(a.view, 960, 680)
-	if err := tt.Click("投屏设置"); err != nil {
+	if err := tt.Click("应用设置"); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.Create(path)
@@ -192,5 +195,21 @@ func TestMirrorSettingsPreview(t *testing.T) {
 	defer f.Close()
 	if err = png.Encode(f, tt.Image()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSettingsChangeQueuesNewValue(t *testing.T) {
+	a := &app{engine: newEngine(), page: "settings", audio: true, size: "1280", fps: "30", preferencesQueue: make(chan preferences, 1)}
+	tt := ui.NewTester(a.view, 960, 680)
+	if err := tt.Click("转发声音"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-a.preferencesQueue:
+		if got.Audio {
+			t.Fatalf("old setting queued: %+v", got)
+		}
+	default:
+		t.Fatal("setting not queued")
 	}
 }

@@ -51,17 +51,16 @@ func (a *app) fastbootView(c *ui.Context) {
 				ui.Text(c, "Fastboot 操作").FontSize(20).Bold()
 				ui.Text(c, a.fastbootSerial).FontSize(12).TextColor(t.TextMuted).SingleLine()
 			})
-			if a.button(c, "fastboot-info", infoIcon, "查看设备信息") {
+			if a.headerButton(c, "fastboot-info", infoIcon, "查看设备信息") {
 				a.fastbootInfoOpen = true
 				a.loadFastbootInfo()
 			}
-			if a.button(c, "terminal", terminalIcon, "打开 Fastboot 终端") {
+			if a.headerButton(c, "terminal", terminalIcon, "打开 Fastboot 终端") {
 				a.openTerminal("Fastboot", a.fastbootSerial)
 			}
 		})
 
 		ui.Column(c).Gap(10).Children(func() {
-			ui.Text(c, "启动选项").Bold()
 			ui.Grid(c).Columns(2).Gap(8).Children(func() {
 				for _, v := range []struct {
 					label, arg string
@@ -86,17 +85,18 @@ func (a *app) fastbootView(c *ui.Context) {
 			})
 		})
 		ui.Column(c).Gap(10).Children(func() {
-			ui.Text(c, "刷写镜像").Bold()
 			ui.Text(c, "确认分区、镜像和设备型号匹配；错误操作可能导致设备无法启动。").FontSize(12).TextColor(t.TextMuted)
 			ui.TextInput(c, &a.partition).Placeholder("分区名，例如 boot").Label("目标分区")
-			if a.deviceAction(c, "选择镜像并刷写", flashIcon) {
-				partition := strings.TrimSpace(a.partition)
-				if validPartition(partition) != nil {
-					a.message = "请输入有效的分区名"
-				} else {
-					a.flash(a.fastbootSerial, partition)
+			ui.Grid(c).Columns(2).Gap(8).Children(func() {
+				if a.deviceAction(c, "选择镜像并刷写", flashIcon) {
+					partition := strings.TrimSpace(a.partition)
+					if validPartition(partition) != nil {
+						a.message = "请输入有效的分区名"
+					} else {
+						a.flash(a.fastbootSerial, partition)
+					}
 				}
-			}
+			})
 		})
 	})
 	ui.Modal(c, &a.fastbootInfoOpen, func() {

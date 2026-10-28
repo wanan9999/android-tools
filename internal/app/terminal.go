@@ -30,7 +30,7 @@ type terminalState struct {
 	historyDraft                string
 }
 
-var runIcon = icon(`<path d="m8 5 11 7-11 7z"/>`)
+var sendIcon = icon(`<path d="M12 19V5M6 11l6-6 6 6"/>`)
 var stopIcon = icon(`<rect x="6" y="6" width="12" height="12" rx="1"/>`)
 var copyIcon = icon(`<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>`)
 
@@ -208,7 +208,7 @@ func (a *app) terminalView(c *ui.Context) {
 					a.message = err.Error()
 				}
 			}
-			if a.button(c, "terminal-run", runIcon, "执行命令") {
+			if a.button(c, "terminal-run", sendIcon, "发送命令") {
 				a.submitTerminal()
 			}
 		})

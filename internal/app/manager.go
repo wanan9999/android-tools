@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,9 +30,10 @@ type savedDevice struct {
 	RetryAt  int64  `json:"retry_at,omitempty"`
 }
 type registry struct {
-	mu      sync.Mutex
-	path    string
-	Devices []savedDevice `json:"devices"`
+	mu          sync.Mutex
+	path        string
+	Devices     []savedDevice `json:"devices"`
+	Preferences *preferences  `json:"preferences,omitempty"`
 }
 
 func openRegistry(path string) (*registry, error) {
@@ -45,6 +47,9 @@ func openRegistry(path string) (*registry, error) {
 	}
 	if err = json.Unmarshal(b, r); err != nil {
 		return nil, fmt.Errorf("设备记录无法读取：%w", err)
+	}
+	if r.Preferences != nil && !r.Preferences.valid() {
+		return nil, errors.New("设备记录中的设置无效")
 	}
 	seen := map[string]bool{}
 	guids := map[string]bool{}
@@ -115,12 +120,16 @@ func (r *registry) remove(hardware string) error {
 	return nil
 }
 func (r *registry) write(devices []savedDevice) error {
+	return r.writeState(devices, r.Preferences)
+}
+func (r *registry) writeState(devices []savedDevice, prefs *preferences) error {
 	if err := os.MkdirAll(filepath.Dir(r.path), 0700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(struct {
-		Devices []savedDevice `json:"devices"`
-	}{devices}, "", "  ")
+		Devices     []savedDevice `json:"devices"`
+		Preferences *preferences  `json:"preferences,omitempty"`
+	}{devices, prefs}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -140,6 +149,30 @@ func (r *registry) write(devices []savedDevice) error {
 		return err
 	}
 	return os.Rename(name, r.path)
+}
+
+func (r *registry) preferences() preferences {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Preferences == nil {
+		return defaultPreferences()
+	}
+	return *r.Preferences
+}
+func (r *registry) savePreferences(p preferences) error {
+	if !p.valid() {
+		return errors.New("设置无效")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Preferences != nil && *r.Preferences == p {
+		return nil
+	}
+	if err := r.writeState(r.Devices, &p); err != nil {
+		return err
+	}
+	r.Preferences = &p
+	return nil
 }
 
 var propertyLine = regexp.MustCompile(`(?m)^\[([^]]+)\]: \[([^]]*)\]\r?$`)
@@ -244,13 +277,16 @@ func (e *engine) connectVerified(addr, guid, hardware string) (identity, error) 
 }
 
 type manager struct {
-	engine       *engine
-	registry     *registry
-	mu           sync.Mutex
-	refreshMu    sync.Mutex
-	pair         *pairSession
-	generation   uint64
-	pairInterval time.Duration
+	engine        *engine
+	registry      *registry
+	mu            sync.Mutex
+	refreshMu     sync.Mutex
+	pair          *pairSession
+	generation    uint64
+	pairInterval  time.Duration
+	identityEpoch atomic.Uint64
+	cacheEpoch    uint64
+	identityCache map[string]identity
 }
 
 func newManager(e *engine, r *registry) *manager {
@@ -269,6 +305,7 @@ func wirelessSDKError(sdk int) error {
 	return nil
 }
 func (m *manager) connect(addr, guid string) error {
+	m.identityEpoch.Add(1)
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 	var expected string
@@ -302,6 +339,7 @@ func (m *manager) connect(addr, guid string) error {
 	return m.remember(id, addr)
 }
 func (m *manager) connectKnown(addr, hardware string) error {
+	m.identityEpoch.Add(1)
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 	var record *savedDevice
@@ -353,6 +391,11 @@ func validConnectionAddress(pairAddress, address string) error {
 func (m *manager) refresh() ([]device, []service, error) {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
+	epoch := m.identityEpoch.Load()
+	if m.identityCache == nil || m.cacheEpoch != epoch {
+		m.identityCache = make(map[string]identity)
+		m.cacheEpoch = epoch
+	}
 	ds, err := m.engine.adbDevices()
 	var services []service
 	if err == nil {
@@ -360,13 +403,22 @@ func (m *manager) refresh() ([]device, []service, error) {
 	}
 	saved := m.registry.snapshot()
 	online := map[string]bool{}
+	active := map[string]bool{}
 	var result []device
 	for _, d := range ds {
 		if d.Kind != "ADB" || d.State != "device" {
 			result = append(result, d)
 			continue
 		}
-		id, e := m.engine.identify(d.Serial)
+		active[d.Serial] = true
+		id, cached := m.identityCache[d.Serial]
+		var e error
+		if !cached {
+			id, e = m.engine.identify(d.Serial)
+			if e == nil && epoch == m.identityEpoch.Load() {
+				m.identityCache[d.Serial] = id
+			}
+		}
 		if e != nil {
 			d.State = "identity_error"
 			result = append(result, d)
@@ -412,6 +464,11 @@ func (m *manager) refresh() ([]device, []service, error) {
 		}
 		result = append(result, d)
 	}
+	for serial := range m.identityCache {
+		if !active[serial] {
+			delete(m.identityCache, serial)
+		}
+	}
 	attempts := 0
 	for _, old := range saved {
 		if online[old.Hardware] {
@@ -455,6 +512,7 @@ func (m *manager) refresh() ([]device, []service, error) {
 	return result, services, err
 }
 func (m *manager) forget(hardware string) error {
+	m.identityEpoch.Add(1)
 	m.cancelPair()
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()

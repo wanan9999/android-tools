@@ -114,8 +114,8 @@ func TestMainViews(t *testing.T) {
 	if !tt.HasText("所有设备") || !tt.HasText("尚未发现设备") {
 		t.Fatalf("texts %v", tt.Texts())
 	}
-	if _, ok := tt.Find("检查并下载组件"); !ok {
-		t.Fatal("missing tools button")
+	if _, ok := tt.Find("检查并下载组件"); ok {
+		t.Fatal("component action should be in settings")
 	}
 	if err := tt.Click("无线连接"); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestMainViews(t *testing.T) {
 	a.page = "fastboot"
 	a.fastbootSerial = "serial"
 	tt.Frame()
-	if !tt.HasText("刷写镜像") {
+	if !tt.HasText("选择镜像并刷写") {
 		t.Fatalf("texts %v", tt.Texts())
 	}
 }
@@ -309,13 +309,24 @@ func TestADBInfoRejectsStaleResults(t *testing.T) {
 func TestADBViewLayoutAndBack(t *testing.T) {
 	a := &app{engine: newEngine(), page: "adb", adbSerial: "device", adbInfo: identity{Hardware: "serial", Model: "Pixel", SDK: 34}}
 	tt := ui.NewTester(a.view, 640, 480)
-	for _, label := range []string{"设备型号", "Pixel", "Android SDK", "硬件身份", "安装 APK", "保存截图", "返回设备"} {
+	for _, label := range []string{"设备型号", "Pixel", "Android 版本", "屏幕分辨率", "电量", "安装 APK", "保存截图", "返回设备", "查看设备信息"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Errorf("missing %s", label)
 		}
 	}
-	if tt.HasText("读取设备信息") {
-		t.Fatal("manual load button remains")
+	if tt.HasText("硬件身份") {
+		t.Fatal("details visible outside dialog")
+	}
+	if err := tt.Click("查看设备信息"); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"Android SDK", "硬件身份", "serial"} {
+		if _, ok := tt.Find(label); !ok {
+			t.Errorf("missing detail %s", label)
+		}
+	}
+	if err := tt.Click("关闭设备信息"); err != nil {
+		t.Fatal(err)
 	}
 	if err := tt.Click("返回设备"); err != nil {
 		t.Fatal(err)
@@ -422,5 +433,78 @@ func TestInvalidDeviceNumbers(t *testing.T) {
 	}}
 	if got := e.loadDeviceDetails("usb").Battery; got != "" {
 		t.Fatalf("invalid battery = %q", got)
+	}
+}
+
+func TestRefreshCachesIdentityUntilDeviceEvent(t *testing.T) {
+	r, err := openRegistry(filepath.Join(t.TempDir(), "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	e := &engine{adb: "adb", execute: func(_ string, _ time.Duration, _ string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "devices -l":
+			return "List of devices attached\nserial device model:Test", nil
+		case "mdns services":
+			return "", nil
+		case "-s serial shell getprop":
+			calls++
+			return props("hardware", ""), nil
+		default:
+			return "", errors.New("unexpected command")
+		}
+	}}
+	m := newManager(e, r)
+	for i := 0; i < 2; i++ {
+		if _, _, err = m.refresh(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("identity queried %d times", calls)
+	}
+	m.identityEpoch.Add(1)
+	if _, _, err = m.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("identity not rechecked: %d", calls)
+	}
+}
+
+func TestRefreshSnapshotSkipsUnchangedResults(t *testing.T) {
+	a := &app{}
+	devices := []device{{Serial: "serial", Kind: "ADB", State: "device"}}
+	if !a.changedRefresh(1, devices, nil, "") {
+		t.Fatal("first update skipped")
+	}
+	if a.changedRefresh(1, devices, []service{}, "") {
+		t.Fatal("unchanged update published")
+	}
+	if !a.changedRefresh(2, devices, nil, "") {
+		t.Fatal("new device revision skipped")
+	}
+	devices[0].State = "offline"
+	if !a.changedRefresh(2, devices, nil, "") {
+		t.Fatal("changed device skipped")
+	}
+}
+
+func TestDeviceHeaderButtonsMatch(t *testing.T) {
+	for _, tc := range []struct{ page, terminal string }{{"adb", "打开 ADB 终端"}, {"fastboot", "打开 Fastboot 终端"}} {
+		a := &app{engine: newEngine(), page: tc.page, adbSerial: "phone", fastbootSerial: "phone", adbInfo: identity{Hardware: "phone"}}
+		tt := ui.NewTester(a.view, 640, 480)
+		info, ok := tt.Find("查看设备信息")
+		if !ok {
+			t.Fatal("missing info")
+		}
+		terminal, ok := tt.Find(tc.terminal)
+		if !ok {
+			t.Fatal("missing terminal")
+		}
+		if info.W != terminal.W || info.H != terminal.H || info.Y != terminal.Y {
+			t.Fatalf("%s: info=%+v terminal=%+v", tc.page, info, terminal)
+		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 )
 
 func (a *app) openADB(serial string) {
+	a.adbInfoOpen = false
 	a.adbSerial, a.page = serial, "adb"
 	a.loadADBInfo()
 }
@@ -93,13 +94,17 @@ func (a *app) applyADBInfo(request uint64, serial string, id identity, err error
 func (a *app) backToDevices() {
 	a.stopTerminal()
 	a.adbInfoRequest++
+	a.adbInfoOpen = false
 	a.fastbootInfoRequest++
 	a.fastbootInfoOpen = false
 	a.page = "devices"
 }
 
 func (a *app) deviceAction(c *ui.Context, label string, symbol *ui.SVG) bool {
-	button := ui.Button(c, "").Grow(1).Height(40).Label(label).Disabled(a.busy)
+	button := ui.ButtonBase(c.Key(label)).Grow(1).Height(44).Radius(8).Padding(0, 16).AlignItems(ui.Center).Justify(ui.Start).Background(c.Theme().Surface).Label(label).Disabled(a.busy)
+	if button.Hovered() && !a.busy {
+		button.Background(c.Theme().SurfaceHover)
+	}
 	button.Children(func() { ui.Icon(c, symbol).Size(16, 16); ui.Text(c, label).Margin(0, 0, 0, 8).SingleLine() })
 	return button.Clicked()
 }
@@ -115,7 +120,10 @@ func (a *app) adbView(c *ui.Context) {
 				ui.Text(c, "ADB 操作").FontSize(20).Bold()
 				ui.Text(c, a.adbSerial).FontSize(12).TextColor(t.TextMuted).SingleLine()
 			})
-			if a.button(c, "terminal", terminalIcon, "打开 ADB 终端") {
+			if a.headerButton(c, "adb-info", infoIcon, "查看设备信息") {
+				a.adbInfoOpen = true
+			}
+			if a.headerButton(c, "terminal", terminalIcon, "打开 ADB 终端") {
 				a.openTerminal("ADB", a.adbSerial)
 			}
 		})
@@ -131,58 +139,91 @@ func (a *app) adbView(c *ui.Context) {
 					}
 				})
 			} else if a.adbInfo.Hardware != "" {
-				model := a.adbInfo.Model
-				if model == "" {
-					model = "未知"
+				rows := []struct{ label, value string }{
+					{"设备型号", a.adbInfo.Model}, {"Android 版本", a.adbInfo.Android},
+					{"屏幕分辨率", a.adbDetails.Resolution}, {"电量", a.adbDetails.Battery},
 				}
-				sdk := "未知"
-				if a.adbInfo.SDK > 0 {
-					sdk = fmt.Sprint(a.adbInfo.SDK)
-				}
-				for _, row := range []struct{ label, value string }{{"设备型号", model}, {"品牌", a.adbInfo.Brand}, {"制造商", a.adbInfo.Manufacturer}, {"设备代号", a.adbInfo.Device}, {"Android 版本", a.adbInfo.Android}, {"Android SDK", sdk}, {"安全补丁", a.adbInfo.SecurityPatch}, {"系统版本", a.adbInfo.BuildID}, {"处理器架构", a.adbInfo.ABI}, {"屏幕分辨率", a.adbDetails.Resolution}, {"电量", a.adbDetails.Battery}, {"硬件身份", a.adbInfo.Hardware}} {
-					row := row
-					if strings.TrimSpace(row.value) == "" {
-						row.value = "未提供"
+				ui.Grid(c).Columns(2).Gap(12).Children(func() {
+					for _, row := range rows {
+						deviceInfoRow(c, row.label, row.value)
 					}
-					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, row.label).Width(100).Shrink(0).FontSize(12).TextColor(t.TextMuted)
-						ui.Text(c, row.value).Grow(1).MinWidth(0).FontSize(13).Selectable()
+				})
+			}
+		})
+		ui.Grid(c).Columns(2).Gap(8).Children(func() {
+			if a.deviceAction(c, "文件管理", folderIcon) {
+				a.openFiles(a.adbSerial)
+			}
+			if a.deviceAction(c, "安装 APK", apkIcon) {
+				a.installAPK(a.adbSerial)
+			}
+			if a.deviceAction(c, "保存截图", cameraIcon) {
+				a.screenshot(a.adbSerial)
+			}
+			for _, v := range []struct {
+				label, arg string
+				icon       *ui.SVG
+			}{
+				{"重启系统", "", restart}, {"进入引导程序", "bootloader", bootIcon}, {"进入恢复模式", "recovery", recoveryIcon},
+			} {
+				if a.deviceAction(c, v.label, v.icon) {
+					serial := a.adbSerial
+					a.task(func() error {
+						args := []string{"-s", serial, "reboot"}
+						if v.arg != "" {
+							args = append(args, v.arg)
+						}
+						_, err := a.engine.run(a.engine.adb, 20*time.Second, "", args...)
+						return err
 					})
 				}
 			}
 		})
-		ui.Column(c).Gap(12).Children(func() {
-			ui.Text(c, "文件与画面").Bold()
-			ui.Grid(c).Columns(2).Gap(8).Children(func() {
-				if a.deviceAction(c, "安装 APK", apkIcon) {
-					a.installAPK(a.adbSerial)
-				}
-				if a.deviceAction(c, "保存截图", cameraIcon) {
-					a.screenshot(a.adbSerial)
-				}
-			})
-		})
-		ui.Column(c).Gap(12).Children(func() {
-			ui.Text(c, "电源与启动").Bold()
-			ui.Grid(c).Columns(2).Gap(8).Children(func() {
-				for _, v := range []struct {
-					label, arg string
-					icon       *ui.SVG
-				}{{"重启系统", "", restart}, {"进入引导程序", "bootloader", bootIcon}, {"进入恢复模式", "recovery", recoveryIcon}} {
-					if a.deviceAction(c, v.label, v.icon) {
-						serial := a.adbSerial
-						a.task(func() error {
-							args := []string{"-s", serial, "reboot"}
-							if v.arg != "" {
-								args = append(args, v.arg)
-							}
-							_, err := a.engine.run(a.engine.adb, 20*time.Second, "", args...)
-							return err
-						})
-					}
+	})
+	ui.Modal(c, &a.adbInfoOpen, func() {
+		ui.Column(c).Width(520).Gap(12).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Text(c, "设备信息").Bold().Grow(1)
+				if a.button(c, "close-adb-info", closeIcon, "关闭设备信息") {
+					a.adbInfoOpen = false
 				}
 			})
+			if a.adbInfoLoading {
+				ui.Text(c, "正在读取设备信息…").FontSize(12).TextColor(t.TextMuted)
+			} else if a.adbInfoError != "" {
+				ui.Text(c, a.adbInfoError).FontSize(12).TextColor(t.TextMuted)
+			} else {
+				sdk := ""
+				if a.adbInfo.SDK > 0 {
+					sdk = fmt.Sprint(a.adbInfo.SDK)
+				}
+				rows := []struct{ label, value string }{
+					{"设备型号", a.adbInfo.Model}, {"品牌", a.adbInfo.Brand},
+					{"制造商", a.adbInfo.Manufacturer}, {"设备代号", a.adbInfo.Device},
+					{"Android 版本", a.adbInfo.Android}, {"Android SDK", sdk},
+					{"安全补丁", a.adbInfo.SecurityPatch}, {"系统版本", a.adbInfo.BuildID},
+					{"处理器架构", a.adbInfo.ABI}, {"屏幕分辨率", a.adbDetails.Resolution},
+					{"电量", a.adbDetails.Battery}, {"硬件身份", a.adbInfo.Hardware},
+				}
+				ui.Scroll(c).MaxHeight(300).Children(func() {
+					ui.Column(c).Gap(10).Children(func() {
+						for _, row := range rows {
+							deviceInfoRow(c, row.label, row.value)
+						}
+					})
+				})
+			}
 		})
+	})
+}
+
+func deviceInfoRow(c *ui.Context, label, value string) {
+	if strings.TrimSpace(value) == "" {
+		value = "未提供"
+	}
+	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).Width(100).Shrink(0).FontSize(12).TextColor(c.Theme().TextMuted)
+		ui.Text(c, value).Grow(1).MinWidth(0).FontSize(13).Selectable()
 	})
 }
 func (a *app) installAPK(serial string) {
