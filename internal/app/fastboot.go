@@ -66,7 +66,7 @@ func (a *app) fastbootView(c *ui.Context) {
 					label, arg string
 					icon       *ui.SVG
 				}{
-					{"重启系统", "", restart}, {"重启引导程序", "bootloader", bootIcon},
+					{"重启系统", "", powerIcon}, {"重启引导程序", "bootloader", bootIcon},
 					{"进入 Fastbootd", "fastboot", bootIcon}, {"进入恢复模式", "recovery", recoveryIcon},
 				} {
 					v := v

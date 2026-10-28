@@ -81,7 +81,7 @@ var settingsIcon = icon(`<path d="M14 17H5M19 7h-9"/><circle cx="17" cy="17" r="
 var screen = icon(`<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>`)
 var screenOff = icon(`<path d="M12 17v4M17 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 1.184-1.826M2 2l20 20M8 21h8M8.656 3H20a2 2 0 0 1 2 2v10a2 2 0 0 1-.293 1.042"/>`)
 var wifiIcon = icon(`<path d="M12 20h.01M2 8.82a15 15 0 0 1 20 0M5 12.859a10 10 0 0 1 14 0M8.5 16.429a5 5 0 0 1 7 0"/>`)
-var restart = icon(`<path d="M20 7v5h-5M4 12a8 8 0 1 0 2-5"/>`)
+var powerIcon = icon(`<path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.77.04"/>`)
 var terminalIcon = icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/>`)
 var actionsIcon = icon(`<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>`)
 var closeIcon = icon(`<path d="M18 6 6 18M6 6l12 12"/>`)
@@ -358,12 +358,6 @@ func (a *app) deviceView(c *ui.Context) {
 			if d.Kind == "Fastboot" && d.State == "fastboot" {
 				if a.button(c, "manage", actionsIcon, "Fastboot 操作") {
 					a.openFastboot(d.Serial)
-				}
-				if a.button(c, "reboot", restart, "重启设备") {
-					a.task(func() error {
-						_, err := a.engine.run(a.engine.fastboot, 15*time.Second, "", "-s", d.Serial, "reboot")
-						return err
-					})
 				}
 			}
 			if d.State == "offline" && d.Hardware != "" && a.manager != nil && a.button(c, "forget", trash, "移除离线设备记录") {

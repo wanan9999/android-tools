@@ -164,7 +164,7 @@ func (a *app) adbView(c *ui.Context) {
 				label, arg string
 				icon       *ui.SVG
 			}{
-				{"重启系统", "", restart}, {"进入引导程序", "bootloader", bootIcon}, {"进入恢复模式", "recovery", recoveryIcon},
+				{"重启系统", "", powerIcon}, {"进入引导程序", "bootloader", bootIcon}, {"进入恢复模式", "recovery", recoveryIcon},
 			} {
 				if a.deviceAction(c, v.label, v.icon) {
 					serial := a.adbSerial
