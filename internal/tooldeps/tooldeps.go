@@ -10,11 +10,9 @@ import (
 	"fmt"
 	"golang.org/x/sys/windows"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const Directory = "android-tools"
@@ -96,33 +94,25 @@ func Check(dir string) error {
 func safeName(n string) bool {
 	return n != "" && n != "." && n != ".." && filepath.Base(n) == n && !strings.ContainsAny(n, `\/:`)
 }
-func download(s source, dir string) (string, error) {
-	resp, e := (&http.Client{Timeout: 2 * time.Minute}).Get(s.url)
-	if e != nil {
-		return "", e
+func download(s source, dir string, options DownloadOptions, name string) (string, error) {
+	f, err := os.CreateTemp(dir, "download-*.zip")
+	if err != nil {
+		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("下载失败：%s", resp.Status)
+	digest, err := Download(options, name, s.url, f, 200<<20)
+	closeErr := f.Close()
+	if err != nil {
+		return "", err
 	}
-	f, e := os.CreateTemp(dir, "download-*.zip")
-	if e != nil {
-		return "", e
+	if closeErr != nil {
+		return "", closeErr
 	}
-	h := sha256.New()
-	n, e := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, (200<<20)+1))
-	ce := f.Close()
-	if e == nil {
-		e = ce
-	}
-	if e != nil {
-		return "", e
-	}
-	if n > 200<<20 || hex.EncodeToString(h.Sum(nil)) != s.sha {
+	if digest != s.sha {
 		return "", errors.New("下载组件摘要不匹配")
 	}
 	return f.Name(), nil
 }
+
 func extract(archive, dest string, s source, m *manifest) error {
 	r, e := zip.OpenReader(archive)
 	if e != nil {
@@ -190,7 +180,7 @@ func removeArchive(path string, original error) error {
 }
 
 // Prepare downloads into a new staging directory, verifies archives and writes a file manifest.
-func Prepare(parent string) (directory string, err error) {
+func Prepare(parent string, options DownloadOptions) (directory string, err error) {
 	stage, e := os.MkdirTemp(parent, ".android-tools-")
 	if e != nil {
 		return "", e
@@ -204,14 +194,27 @@ func Prepare(parent string) (directory string, err error) {
 		}
 	}()
 	m := manifest{Files: map[string]string{}}
-	for _, s := range sources {
-		archive, e := download(s, stage)
+	for i, s := range sources {
+		if e := options.context().Err(); e != nil {
+			return "", e
+		}
+		name := "ADB / Fastboot"
+		if i == 1 {
+			name = "scrcpy"
+		}
+		archive, e := download(s, stage, options, name)
 		if e != nil {
 			return "", e
+		}
+		if options.Progress != nil {
+			options.Progress(Progress{Name: "正在校验 " + name, Total: -1})
 		}
 		e = extract(archive, stage, s, &m)
 		e = removeArchive(archive, e)
 		if e != nil {
+			return "", e
+		}
+		if e = options.context().Err(); e != nil {
 			return "", e
 		}
 	}
@@ -248,12 +251,12 @@ func moveNew(from, to string) error {
 }
 
 // Ensure never overwrites a pre-existing tool; missing files are moved atomically.
-func Ensure(parent string) (changed bool, err error) {
+func Ensure(parent string, options DownloadOptions) (changed bool, err error) {
 	target := filepath.Join(parent, Directory)
 	if Check(target) == nil {
 		return false, nil
 	}
-	stage, e := Prepare(parent)
+	stage, e := Prepare(parent, options)
 	if e != nil {
 		return false, e
 	}
@@ -262,6 +265,9 @@ func Ensure(parent string) (changed bool, err error) {
 			err = errors.Join(err, fmt.Errorf("清理组件暂存目录失败：%w", cleanupErr))
 		}
 	}()
+	if e = options.context().Err(); e != nil {
+		return false, e
+	}
 	fresh, e := load(stage)
 	if e != nil {
 		return false, e

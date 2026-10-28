@@ -59,7 +59,7 @@ func TestEnsureDownloadsRepairsMissingAndRejectsModified(t *testing.T) {
 	trustedManifestSHA = hash(encoded)
 	sources = []source{{server.URL + "/a", hash(a), map[string]bool{"adb.exe": true, "fastboot.exe": true, "AdbWinApi.dll": true, "AdbWinUsbApi.dll": true, "NOTICE.txt": true}}, {server.URL + "/b", hash(b), nil}}
 	parent := t.TempDir()
-	changed, e := Ensure(parent)
+	changed, e := Ensure(parent, DownloadOptions{})
 	if e != nil || !changed {
 		t.Fatalf("initial %v %v", changed, e)
 	}
@@ -67,21 +67,21 @@ func TestEnsureDownloadsRepairsMissingAndRejectsModified(t *testing.T) {
 	if e = Check(dir); e != nil {
 		t.Fatal(e)
 	}
-	changed, e = Ensure(parent)
+	changed, e = Ensure(parent, DownloadOptions{})
 	if e != nil || changed {
 		t.Fatalf("existing %v %v", changed, e)
 	}
 	if e = os.Remove(filepath.Join(dir, "fastboot.exe")); e != nil {
 		t.Fatal(e)
 	}
-	changed, e = Ensure(parent)
+	changed, e = Ensure(parent, DownloadOptions{})
 	if e != nil || !changed {
 		t.Fatalf("repair %v %v", changed, e)
 	}
 	if e = os.WriteFile(filepath.Join(dir, "adb.exe"), []byte("modified"), 0644); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = Ensure(parent); e == nil {
+	if _, e = Ensure(parent, DownloadOptions{}); e == nil {
 		t.Fatal("modified executable replaced")
 	}
 	b2, e := os.ReadFile(filepath.Join(dir, "adb.exe"))
@@ -104,7 +104,7 @@ func TestOfficialDownload(t *testing.T) {
 		t.Skip("需要联网时运行")
 	}
 	parent := t.TempDir()
-	changed, e := Ensure(parent)
+	changed, e := Ensure(parent, DownloadOptions{})
 	if e != nil || !changed {
 		t.Fatalf("download=%v err=%v", changed, e)
 	}

@@ -1,10 +1,13 @@
 package app
 
 type preferences struct {
-	Audio   bool   `json:"audio"`
-	Size    string `json:"size"`
-	FPS     string `json:"fps"`
-	Bitrate string `json:"bitrate,omitempty"`
+	Audio         bool   `json:"audio"`
+	Size          string `json:"size"`
+	FPS           string `json:"fps"`
+	Bitrate       string `json:"bitrate,omitempty"`
+	ProxyProtocol string `json:"proxy_protocol,omitempty"`
+	ProxyAddress  string `json:"proxy_address,omitempty"`
+	ProxySystem   bool   `json:"proxy_system,omitempty"`
 }
 
 func defaultPreferences() preferences {
@@ -18,13 +21,13 @@ func validBitrate(v string) bool {
 	return false
 }
 func (p preferences) valid() bool {
-	return (p.Size == "720" || p.Size == "1280" || p.Size == "1920" || p.Size == "2560") && (p.FPS == "15" || p.FPS == "30" || p.FPS == "60") && validBitrate(p.Bitrate)
+	return (p.ProxyProtocol == "" || p.ProxyProtocol == "HTTP" || p.ProxyProtocol == "SOCKS5") && (p.Size == "720" || p.Size == "1280" || p.Size == "1920" || p.Size == "2560") && (p.FPS == "15" || p.FPS == "30" || p.FPS == "60") && validBitrate(p.Bitrate)
 }
 func (a *app) savePreferences() {
 	if a.preferencesQueue == nil {
 		return
 	}
-	p := preferences{Audio: a.audio, Size: a.size, FPS: a.fps, Bitrate: a.bitrate}
+	p := preferences{Audio: a.audio, Size: a.size, FPS: a.fps, Bitrate: a.bitrate, ProxyProtocol: a.proxyProtocol, ProxyAddress: a.proxyAddress, ProxySystem: a.proxySystem}
 	select {
 	case a.preferencesQueue <- p:
 	default:

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -131,22 +132,46 @@ type cmNotifyFilter struct {
 var cmLibrary = windows.NewLazySystemDLL("cfgmgr32.dll")
 var cmRegister = cmLibrary.NewProc("CM_Register_Notification")
 var cmUnregister = cmLibrary.NewProc("CM_Unregister_Notification")
+var usbSubscriptions = struct {
+	sync.Mutex
+	next     uintptr
+	channels map[uintptr]chan<- struct{}
+}{channels: make(map[uintptr]chan<- struct{})}
 
-func subscribeUSB(ch chan<- struct{}) (func(), error) {
-	filter := cmNotifyFilter{Size: uint32(unsafe.Sizeof(cmNotifyFilter{})), Flags: 1}
-	callback := windows.NewCallback(func(_, _, _, _, _ uintptr) uintptr {
+// Go's Windows callback thunks are process-wide and cannot be freed. Allocate
+// one thunk and release each subscription's channel when it is unregistered.
+var usbCallback = windows.NewCallback(func(_, token, _, _, _ uintptr) uintptr {
+	usbSubscriptions.Lock()
+	ch := usbSubscriptions.channels[token]
+	if ch != nil {
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
-		return 0
-	})
+	}
+	usbSubscriptions.Unlock()
+	return 0
+})
+
+func subscribeUSB(ch chan<- struct{}) (func(), error) {
+	filter := cmNotifyFilter{Size: uint32(unsafe.Sizeof(cmNotifyFilter{})), Flags: 1}
+	usbSubscriptions.Lock()
+	usbSubscriptions.next++
+	token := usbSubscriptions.next
+	usbSubscriptions.channels[token] = ch
+	usbSubscriptions.Unlock()
+	remove := func() {
+		usbSubscriptions.Lock()
+		delete(usbSubscriptions.channels, token)
+		usbSubscriptions.Unlock()
+	}
 	var handle uintptr
-	result, _, _ := cmRegister.Call(uintptr(unsafe.Pointer(&filter)), 0, callback, uintptr(unsafe.Pointer(&handle)))
+	result, _, _ := cmRegister.Call(uintptr(unsafe.Pointer(&filter)), token, usbCallback, uintptr(unsafe.Pointer(&handle)))
 	if result != 0 {
+		remove()
 		return nil, fmt.Errorf("注册设备通知失败：%d", result)
 	}
-	return func() { cmUnregister.Call(handle) }, nil
+	return func() { cmUnregister.Call(handle); remove() }, nil
 }
 func (e *engine) watchFastboot(ctx context.Context, manual <-chan struct{}, changed func(fastbootSnapshot)) {
 	events := make(chan struct{}, 1)

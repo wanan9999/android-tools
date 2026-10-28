@@ -2,11 +2,8 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +12,7 @@ import (
 	"time"
 	"unsafe"
 
+	"android-tools/internal/tooldeps"
 	"golang.org/x/sys/windows"
 )
 
@@ -37,47 +35,40 @@ func verifyDriverCatalog(path string) error {
 	return closeErr
 }
 
-func downloadGoogleDriver(ctx context.Context, dir string) (string, error) {
-	client := http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+func downloadGoogleDriver(ctx context.Context, dir string, options tooldeps.DownloadOptions) (string, error) {
+	client := &http.Client{Timeout: 2 * time.Minute}
+	if options.Client != nil {
+		copyClient := *options.Client
+		client = &copyClient
+	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) > 5 || req.URL.Scheme != "https" || !strings.EqualFold(req.URL.Hostname(), "catalog.s.download.windowsupdate.com") {
 			return errors.New("驱动下载地址无效")
 		}
 		return nil
-	}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, googleDriverURL, nil)
-	if err != nil {
-		return "", err
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("驱动下载失败：%w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("驱动下载失败：%s", resp.Status)
-	}
+	options.Context, options.Client = ctx, client
 	path := filepath.Join(dir, "driver.cab")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, 32<<20))
+	digest, err := tooldeps.Download(options, "Fastboot 驱动", googleDriverURL, f, 32<<20)
 	closeErr := f.Close()
-	if copyErr != nil {
-		return "", copyErr
+	if err != nil {
+		return "", err
 	}
 	if closeErr != nil {
 		return "", closeErr
 	}
-	if n == 32<<20 || hex.EncodeToString(h.Sum(nil)) != googleDriverSHA256 {
+	if digest != googleDriverSHA256 {
 		return "", errors.New("驱动包校验失败")
 	}
 	return path, nil
 }
 
-func prepareGoogleDriver(ctx context.Context, dir string) (string, error) {
-	cab, err := downloadGoogleDriver(ctx, dir)
+func prepareGoogleDriver(ctx context.Context, dir string, options tooldeps.DownloadOptions) (string, error) {
+	cab, err := downloadGoogleDriver(ctx, dir, options)
 	if err != nil {
 		return "", err
 	}
@@ -232,7 +223,7 @@ func fastbootHasUniqueSerial(devices []device, serial string) bool {
 	return count == 1
 }
 
-func (e *engine) installFastbootDriver(parent context.Context, instance, serial string, progress func(string), confirm func() bool) error {
+func (e *engine) installFastbootDriver(parent context.Context, instance, serial string, options tooldeps.DownloadOptions, progress func(string), confirm func() bool) error {
 	if err := eligibleFastbootCandidate(instance); err != nil {
 		return err
 	}
@@ -243,7 +234,7 @@ func (e *engine) installFastbootDriver(parent context.Context, instance, serial 
 	defer func() { _ = os.RemoveAll(dir) }()
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
-	inf, err := prepareGoogleDriver(ctx, dir)
+	inf, err := prepareGoogleDriver(ctx, dir, options)
 	if err != nil {
 		return err
 	}

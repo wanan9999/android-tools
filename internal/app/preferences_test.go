@@ -15,7 +15,7 @@ func TestPreferencesShareRegistryWithoutOverwritingDevices(t *testing.T) {
 	if err = r.save(savedDevice{Hardware: "device"}); err != nil {
 		t.Fatal(err)
 	}
-	want := preferences{Audio: false, Size: "1920", FPS: "60", Bitrate: "12 Mbps"}
+	want := preferences{Audio: false, Size: "1920", FPS: "60", Bitrate: "12 Mbps", ProxyProtocol: "SOCKS5", ProxyAddress: "127.0.0.1:10808", ProxySystem: true}
 	if err = r.savePreferences(want); err != nil {
 		t.Fatal(err)
 	}

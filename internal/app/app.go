@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"android-tools/internal/appicon"
+	"android-tools/internal/tooldeps"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	qrcode "github.com/skip2/go-qrcode"
@@ -22,53 +23,59 @@ import (
 )
 
 type app struct {
-	win                                                *mygo.Window
-	engine                                             *engine
-	manager                                            *manager
-	devices                                            []device
-	services                                           []service
-	fastbootCandidates                                 []fastbootCandidate
-	fastbootScanError                                  bool
-	fastbootDeviceError                                bool
-	fastbootWake                                       chan struct{}
-	driverHelp                                         bool
-	driverLaunching                                    bool
-	driverHelpError                                    string
-	driverHelpRevision                                 uint64
-	driverTarget                                       fastbootCandidate
-	driverCancel                                       context.CancelFunc
-	selected, page, address, code, connection, message string
-	busy, audio                                        bool
-	flashing                                           bool
-	qrRevision                                         uint64
-	qrActive                                           bool
-	qrConnecting                                       bool
-	qr                                                 *ui.Bitmap
-	qrState, pairGUID, partition                       string
-	fastbootSerial, fastbootOutput                     string
-	fastbootInfoError                                  string
-	fastbootInfoLoading                                bool
-	fastbootInfoOpen                                   bool
-	fastbootInfoRequest                                uint64
-	pairedAddress                                      string
-	adbSerial                                          string
-	adbInfo                                            identity
-	adbDetails                                         deviceDetails
-	adbInfoError                                       string
-	adbInfoLoading                                     bool
-	adbInfoOpen                                        bool
-	adbInfoRequest                                     uint64
-	size, fps, bitrate                                 string
-	refreshing                                         atomic.Bool
-	pendingRefresh                                     atomic.Bool
-	deviceRevision                                     atomic.Uint64
-	pairMode                                           int
-	terminal                                           terminalState
-	files                                              fileState
-	preferencesQueue                                   chan preferences
-	preferencesDone                                    chan struct{}
-	refreshSnapshotMu                                  sync.Mutex
-	refreshSnapshot                                    refreshSnapshot
+	win                                                   *mygo.Window
+	engine                                                *engine
+	manager                                               *manager
+	devices                                               []device
+	services                                              []service
+	fastbootCandidates                                    []fastbootCandidate
+	fastbootScanError                                     bool
+	fastbootDeviceError                                   bool
+	fastbootWake                                          chan struct{}
+	driverHelp                                            bool
+	driverLaunching                                       bool
+	driverHelpError                                       string
+	driverHelpRevision                                    uint64
+	driverTarget                                          fastbootCandidate
+	driverCancel                                          context.CancelFunc
+	selected, page, address, code, connection, message    string
+	busy, audio                                           bool
+	flashing                                              bool
+	qrRevision                                            uint64
+	qrActive                                              bool
+	qrConnecting                                          bool
+	qr                                                    *ui.Bitmap
+	qrState, pairGUID, partition                          string
+	fastbootSerial, fastbootOutput                        string
+	fastbootInfoError                                     string
+	fastbootInfoLoading                                   bool
+	fastbootInfoOpen                                      bool
+	fastbootInfoRequest                                   uint64
+	pairedAddress                                         string
+	adbSerial                                             string
+	adbInfo                                               identity
+	adbDetails                                            deviceDetails
+	adbInfoError                                          string
+	adbInfoLoading                                        bool
+	adbInfoOpen                                           bool
+	adbInfoRequest                                        uint64
+	size, fps, bitrate                                    string
+	proxyProtocol, proxyAddress, proxyLatency, proxyError string
+	proxySystem, proxyTesting                             bool
+	proxyRevision                                         uint64
+	toolsProgress, driverProgress                         tooldeps.Progress
+	toolsDownloading                                      bool
+	toolsCancel                                           context.CancelFunc
+	refreshing                                            atomic.Bool
+	pendingRefresh                                        atomic.Bool
+	deviceRevision                                        atomic.Uint64
+	pairMode                                              int
+	terminal                                              terminalState
+	files                                                 fileState
+	preferencesQueue                                      chan preferences
+	preferencesDone                                       chan struct{}
+	refreshSnapshotMu                                     sync.Mutex
+	refreshSnapshot                                       refreshSnapshot
 }
 
 func icon(s string) *ui.SVG {
@@ -77,6 +84,7 @@ func icon(s string) *ui.SVG {
 
 var phone = icon(`<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/>`)
 var refresh = icon(`<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5 9a7 7 0 0 1 12-3l3 3M19 15a7 7 0 0 1-12 3l-3-3"/>`)
+var boltIcon = icon(`<path d="m13 2-9 12h7l-1 8 10-12h-7z"/>`)
 var settingsIcon = icon(`<path d="M14 17H5M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>`)
 var screen = icon(`<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>`)
 var screenOff = icon(`<path d="M12 17v4M17 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 1.184-1.826M2 2l20 20M8 21h8M8.656 3H20a2 2 0 0 1 2 2v10a2 2 0 0 1-.293 1.042"/>`)
@@ -398,15 +406,32 @@ func (a *app) deviceView(c *ui.Context) {
 			if a.driverHelpError != "" {
 				ui.Text(c, a.driverHelpError).FontSize(12).TextColor(t.TextMuted)
 			}
+			if a.driverLaunching && a.driverProgress.Name != "" {
+				downloadProgressView(c, a.driverProgress)
+			}
 			ui.Row(c).Gap(8).Wrap().Children(func() {
 				if ui.PrimaryButton(c, "查找兼容驱动").Disabled(a.driverLaunching || a.fastbootScanError).Clicked() {
 					a.driverLaunching = true
+					a.driverProgress = tooldeps.Progress{}
 					a.driverHelpError = "正在下载并校验驱动…"
 					target, revision := a.driverTarget, a.driverHelpRevision
+					downloadOptions, optionErr := a.networkDownloadOptions(func(p tooldeps.Progress) {
+						a.win.Update(func() {
+							if a.driverHelp && a.driverHelpRevision == revision {
+								a.driverProgress = p
+							}
+						})
+					})
+					if optionErr != nil {
+						a.driverLaunching = false
+						a.driverHelpError = optionErr.Error()
+						return
+					}
 					ctx, cancel := context.WithCancel(context.Background())
 					a.driverCancel = cancel
 					go func() {
 						defer cancel()
+						defer downloadOptions.Client.CloseIdleConnections()
 						progress := func(message string) {
 							a.win.Update(func() {
 								if a.driverHelp && a.driverHelpRevision == revision {
@@ -431,7 +456,7 @@ func (a *app) deviceView(c *ui.Context) {
 								return false
 							}
 						}
-						err := a.engine.installFastbootDriver(ctx, target.Instance, target.Serial, progress, confirm)
+						err := a.engine.installFastbootDriver(ctx, target.Instance, target.Serial, downloadOptions, progress, confirm)
 						select {
 						case a.fastbootWake <- struct{}{}:
 						default:
@@ -712,6 +737,7 @@ func Run() {
 			a.manager = newManager(a.engine, reg)
 			prefs := reg.preferences()
 			a.audio, a.size, a.fps, a.bitrate = prefs.Audio, prefs.Size, prefs.FPS, prefs.Bitrate
+			a.proxyProtocol, a.proxyAddress, a.proxySystem = prefs.ProxyProtocol, prefs.ProxyAddress, prefs.ProxySystem
 		}
 	}
 	if err != nil {
@@ -790,6 +816,9 @@ func Run() {
 		log.Print(err)
 	}
 	a.stopTerminal()
+	if a.toolsCancel != nil {
+		a.toolsCancel()
+	}
 	if a.preferencesQueue != nil {
 		close(a.preferencesQueue)
 		<-a.preferencesDone

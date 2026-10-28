@@ -10,6 +10,25 @@ import (
 	"time"
 )
 
+func TestUSBSubscriptionsAreReleased(t *testing.T) {
+	usbSubscriptions.Lock()
+	before := len(usbSubscriptions.channels)
+	usbSubscriptions.Unlock()
+	for i := 0; i < 20; i++ {
+		stop, err := subscribeUSB(make(chan struct{}, 1))
+		if err != nil {
+			t.Skipf("Windows device notifications unavailable: %v", err)
+		}
+		stop()
+	}
+	usbSubscriptions.Lock()
+	after := len(usbSubscriptions.channels)
+	usbSubscriptions.Unlock()
+	if after != before {
+		t.Fatalf("subscriptions retained: before %d, after %d", before, after)
+	}
+}
+
 func TestFastbootCompatibleIDs(t *testing.T) {
 	for _, tt := range []struct {
 		id   string

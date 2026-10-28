@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"android-tools/internal/tooldeps"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -40,7 +41,7 @@ func TestDriverPackageVerification(t *testing.T) {
 		t.Skip("opt-in download")
 	}
 	dir := t.TempDir()
-	inf, err := prepareGoogleDriver(context.Background(), dir)
+	inf, err := prepareGoogleDriver(context.Background(), dir, tooldeps.DownloadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

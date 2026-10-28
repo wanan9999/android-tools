@@ -110,16 +110,28 @@ func build(out string) (err error) {
 			return e
 		}
 	}
-	if err = os.MkdirAll(filepath.Join(stage, "internal", "tooldeps"), 0755); err != nil {
+	depsStage := filepath.Join(stage, "internal", "tooldeps")
+	if err = os.MkdirAll(depsStage, 0755); err != nil {
 		return err
 	}
-	dep, e := os.ReadFile(filepath.Join("internal", "tooldeps", "tooldeps.go"))
-	if e != nil {
-		return e
+	depEntries, err := os.ReadDir(filepath.Join("internal", "tooldeps"))
+	if err != nil {
+		return err
 	}
-	if e = os.WriteFile(filepath.Join(stage, "internal", "tooldeps", "tooldeps.go"), dep, 0644); e != nil {
-		return e
+	for _, entry := range depEntries {
+		n := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join("internal", "tooldeps", n))
+		if err != nil {
+			return err
+		}
+		if err = os.WriteFile(filepath.Join(depsStage, n), content, 0644); err != nil {
+			return err
+		}
 	}
+
 	iconData, err := appicon.ICO()
 	if err != nil {
 		return err
@@ -145,7 +157,7 @@ func build(out string) (err error) {
 		return err
 	}
 	fmt.Println("下载并校验 Android 组件")
-	toolsDir, err := tooldeps.Prepare(temp)
+	toolsDir, err := tooldeps.Prepare(temp, tooldeps.DownloadOptions{})
 	if err != nil {
 		return err
 	}
