@@ -19,3 +19,9 @@
 - 在“应用设置”中可配置 HTTP 或 SOCKS5 代理，或使用 Windows 系统代理；留空时直连。闪电图标显示建立连接后访问 Google 测试地址的响应延迟，组件和驱动下载会显示进度。
 
 设备记录和应用设置保存在 `%APPDATA%\android-tools\devices.json`。删除该文件会清除应用中的设备记录和设置。
+
+## 应用截图
+
+![1](.github/demo/demo1.png)
+
+![2](.github/demo/demo2.png)
