@@ -1,5 +1,7 @@
 # android-tools
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/android-tools)
+
 一个 Windows 上的安卓设备工具，支持连接手机、投屏、文件管理和 Fastboot 刷机。
 
 ## 开始使用
